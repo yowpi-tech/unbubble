@@ -20,8 +20,7 @@ description: >
   usado", "campos ou tabelas sem uso", "limpar o app Bubble", or dead-code / orphan analysis of
   a Bubble project. Trigger even if they only mention one category (e.g. "which plugins aren't
   used", "unused database fields", "custom events never called", "dead workflows", or "unused API
-  Connector calls") — the skill answers all nine areas and the user can read just the part they need. Also use to cross-reference a page-audit spreadsheet against what the app
-  actually references.
+  Connector calls") — the skill answers all nine areas and the user can read just the part they need.
 ---
 
 # Bubble unused-entities audit
@@ -77,7 +76,7 @@ python3 scripts/bubble_audit.py export.bubble \
   --json results.json \      # also emit a machine-readable summary
   --lang pt \                # report language: pt (default) or en
   --date 2026-07-09 \        # date stamp shown in the report header
-  --pages-csv audit.csv \    # optional: cross-reference a page-audit spreadsheet (see below)
+  --pages-csv audit.csv \    # ONLY if the user hands you a page-inventory CSV for THIS app (see below)
   --state progress.md \      # optional: pre-check items already deleted (from the report's Export)
   --plugin-names names.json  # optional: extra {pluginId: name} to extend the bundled registry
 ```
@@ -161,19 +160,20 @@ store `null` for it; the report flags those as "likely delisted," which is itsel
 safe-to-remove signal. Do this only when a report actually surfaces unknown plugins — don't
 pre-resolve the whole marketplace.
 
-## Optional: cross-reference a page-audit spreadsheet
+## Page-audit spreadsheet: project-specific input — NEVER assume one exists
 
-Teams often keep a spreadsheet inventorying pages (a status or a planned-action column,
-etc.). Pass it with `--pages-csv audit.csv` to join it against what the app actually references.
-The script auto-detects the page-name column (first column by default; override with
-`--pages-csv-name-col`) and any status-like columns (override/add with `--pages-csv-status-col`,
-repeatable). Each no-navigation page then gets a verdict — **in-use** (team says it's live →
-don't delete), **candidate** (team is unsure), or **confirmed-dead** (team already flagged it) —
-so the human signal and the static signal reinforce each other.
+The audit is based **solely on the `.bubble` export**. Do NOT ask for, search for, or expect a
+page-inventory spreadsheet as part of this skill's workflow — that was a one-off artifact of a
+single project and belongs to that project only, not to the skill.
 
-If the audit lives in Google Sheets, download a tab as CSV first:
-`curl -sL "https://docs.google.com/spreadsheets/d/<ID>/export?format=csv" -o audit.csv`
-(For a specific tab use xlsx and read the sheet, or append `&gid=<gid>`.)
+The `--pages-csv` flag exists **only** for the case where the user, on their own initiative, hands
+you a page-inventory CSV for the specific app being audited (e.g. a status or a planned-action
+column per page). In that case pass it with `--pages-csv audit.csv`: the script
+auto-detects the page-name column (first column by default; override with `--pages-csv-name-col`)
+and any status-like columns (override/add with `--pages-csv-status-col`, repeatable), and each
+no-navigation page gets a verdict — **in-use**, **candidate**, or **confirmed-dead** — so the
+human signal and the static signal reinforce each other. If no such file is offered, skip this
+entirely; it is not a step of the audit.
 
 ## Reference model (for debugging or extending)
 
