@@ -330,11 +330,19 @@ def analyze_backend(data, quoted, selfapi_used=None):
     # absent-key workflows are exactly the ones the app itself calls via API Connector self-calls).
     # Gated on the app-level Workflow API switch: with the API off nothing is reachable externally.
     wf_api_on = bool(client_safe.get('exposes_wf_api', True))
-    # scheduled targets from ANYWHERE, and specifically from page/def (client) contexts
+    # scheduled/triggered targets from ANYWHERE, and specifically from page/def (client) contexts.
+    # Covers both target kinds: api_event (Schedule API workflow) and custom_event (Trigger a
+    # custom event — incl. TriggerBackendCustomEvent, how pages call backend custom events).
     sched_all, sched_client = set(), set()
     def grab(node, into):
-        if node.get('type') in ('ScheduleAPIEvent', 'ScheduleAPIEventOnList'):
+        t = node.get('type')
+        if t in ('ScheduleAPIEvent', 'ScheduleAPIEventOnList'):
             tv = (node.get('properties') or {}).get('api_event')
+            if isinstance(tv, str):
+                into.add(tv)
+        elif t in ('TriggerCustomEvent', 'ScheduleCustom', 'TriggerCustomEventFromReusable',
+                   'TriggerBackendCustomEvent'):
+            tv = (node.get('properties') or {}).get('custom_event')
             if isinstance(tv, str):
                 into.add(tv)
     walk(data, lambda n: grab(n, sched_all))
@@ -346,19 +354,29 @@ def analyze_backend(data, quoted, selfapi_used=None):
         if isinstance(dv, dict):
             walk(dv.get('elements'), lambda n: grab(n, sched_client))
             walk(dv.get('workflows'), lambda n: grab(n, sched_client))
-    # per-workflow scheduling edges (for transitive reachability)
+    # per-workflow scheduling/trigger edges over ALL backend nodes (for transitive reachability).
+    # The graph must include every `api` entry — APIEvent, CustomEvent, DatabaseTriggerEvent,
+    # RecurringEvent — because chains like "DB trigger schedules an APIEvent" or "page triggers a
+    # backend CustomEvent whose actions schedule an APIEvent" keep those APIEvents alive. DB
+    # triggers and recurring events fire on their own, so they are always-live roots.
     edges = defaultdict(set)
-    apievent_ids = set()
+    apievent_ids, node_ids, auto_roots = set(), set(), set()
     rows = []
     for wk, v in api.items():
-        if not isinstance(v, dict) or v.get('type') != 'APIEvent':
+        if not isinstance(v, dict):
             continue
         iid = v.get('id')
         if not iid:
             continue
+        vtype = v.get('type')
+        node_ids.add(iid)
+        walk(v.get('actions'), lambda n, s=iid: grab(n, edges[s]))
+        if vtype in ('DatabaseTriggerEvent', 'RecurringEvent'):
+            auto_roots.add(iid)
+        if vtype != 'APIEvent':
+            continue
         apievent_ids.add(iid)
         p = v.get('properties', {}) or {}
-        walk(v.get('actions'), lambda n, s=iid: grab(n, edges[s]))
         rows.append({'inner_id': iid, 'wf_name': p.get('wf_name'),
                      'folder': folders.get(p.get('wf_folder'), '(no folder)'),
                      'expose': bool(p.get('expose', wf_api_on)),
@@ -366,9 +384,10 @@ def analyze_backend(data, quoted, selfapi_used=None):
                      'self_api': p.get('wf_name') in selfapi_used,
                      'scheduled': iid in sched_all,
                      'refs': refs_elsewhere(iid, v, quoted)})
-    # roots = exposed endpoints + workflows scheduled from client side + self-API-called workflows
+    # roots = exposed endpoints + self-API-called workflows + anything scheduled/triggered from the
+    # client side + self-firing backend events (DB triggers, recurring)
     roots = ({r['inner_id'] for r in rows if r['expose'] or r['self_api']}
-             | (sched_client & apievent_ids))
+             | (sched_client & node_ids) | auto_roots)
     reach, frontier = set(), set(roots)
     while frontier:
         nxt = set()
@@ -376,7 +395,7 @@ def analyze_backend(data, quoted, selfapi_used=None):
             if iid in reach:
                 continue
             reach.add(iid)
-            nxt |= (edges.get(iid, set()) & apievent_ids)
+            nxt |= (edges.get(iid, set()) & node_ids)
         frontier = nxt - reach
     exposed = 0
     for r in rows:
@@ -675,7 +694,8 @@ def analyze_workflows(data):
     targets = set()
     def collect_targets(o):
         if isinstance(o, dict):
-            if o.get('type') in ('TriggerCustomEvent', 'ScheduleCustom', 'TriggerCustomEventFromReusable'):
+            if o.get('type') in ('TriggerCustomEvent', 'ScheduleCustom', 'TriggerCustomEventFromReusable',
+                                 'TriggerBackendCustomEvent'):
                 tv = (o.get('properties') or {}).get('custom_event')
                 if isinstance(tv, str):
                     targets.add(tv)
