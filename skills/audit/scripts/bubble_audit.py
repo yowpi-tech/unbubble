@@ -1052,9 +1052,21 @@ STR = {
   'wf_hidden_b': 'Agora <strong>com as condicionais consideradas</strong> (aba <em>Conditional</em> = <code>states</code>). O gatilho está ligado a um elemento que <strong>nunca aparece na tela</strong>: nem ele nem nenhum grupo-pai pode ficar visível — <code>is_visible</code> padrão = não, nenhuma ação Show/Toggle/Animate e nenhuma condicional que o exiba. A coluna <em>Motivo</em> mostra se é o próprio elemento ou um grupo-pai oculto. Resíduo a verificar: condicionais cujo resultado nunca é verdadeiro, visibilidade via plugin/JS, ou regras de responsividade.',
   'th_trigger': 'Gatilho', 'th_container': 'Página/Reusável', 'th_event': 'Custom Event', 'th_elem': 'Elemento',
   'th_reason': 'Motivo', 'wf_h_self': 'elemento nunca exibido', 'wf_h_anc': 'grupo-pai oculto:',
-  'wf_none': 'Nenhum.', 'wf_kp': 'página', 'wf_kr': 'reusável',
+  'wf_kp': 'página', 'wf_kr': 'reusável',
   'c_wf': 'Custom Events sem uso', 'c_wf_orphan': 'WF em elemento inexistente',
   'method': 'Metodologia & limites', 'already_deleted': 'já deletados',
+  'pages_none': 'Todas as páginas são navegadas ou referenciadas — nenhuma candidata a exclusão.',
+  'reuse_none': 'Todos os elementos reutilizáveis estão em uso.',
+  'back_none': 'Todos os backend workflows estão alcançáveis — expostos como endpoint ou agendados internamente.',
+  'opt_none': 'Todos os Option Sets estão em uso.',
+  'plug_none_orphan': 'Nenhum plugin órfão — todos os plugins instalados têm uso identificado.',
+  'plug_none_cfg': 'Nenhum plugin nesta situação.',
+  'sty_none': 'Todos os estilos estão aplicados a pelo menos um elemento.',
+  'dt_none_fields': 'Todos os campos estão em uso.',
+  'wf_bce_none': 'Todos os Custom Events do backend são chamados.',
+  'wf_ce_none': 'Todos os Custom Events de páginas/reusáveis são chamados.',
+  'wf_orphan_none': 'Nenhum workflow com gatilho em elemento deletado.',
+  'wf_hidden_none': 'Nenhum workflow com gatilho em elemento que nunca é renderizado.',
  },
  'en': {
   'title': 'Unused-elements report', 'sub_src': 'Static analysis of a Bubble export',
@@ -1157,9 +1169,21 @@ STR = {
   'wf_hidden_b': 'Now <strong>with conditionals accounted for</strong> (the <em>Conditional</em> tab = <code>states</code>). The trigger is bound to an element that <strong>never appears on screen</strong>: neither it nor any parent group can become visible — default <code>is_visible</code> = no, no Show/Toggle/Animate action, and no conditional reveals it. The <em>Reason</em> column shows whether it is the element itself or a hidden parent group. Residual to verify: conditionals that never evaluate true, plugin/JS-driven visibility, or responsive rules.',
   'th_trigger': 'Trigger', 'th_container': 'Page/Reusable', 'th_event': 'Custom Event', 'th_elem': 'Element',
   'th_reason': 'Reason', 'wf_h_self': 'element never shown', 'wf_h_anc': 'hidden parent group:',
-  'wf_none': 'None.', 'wf_kp': 'page', 'wf_kr': 'reusable',
+  'wf_kp': 'page', 'wf_kr': 'reusable',
   'c_wf': 'Unused Custom Events', 'c_wf_orphan': 'WF on missing element',
   'method': 'Methodology & limits', 'already_deleted': 'already deleted',
+  'pages_none': 'Every page is navigated to or referenced — no deletion candidates.',
+  'reuse_none': 'All reusable elements are in use.',
+  'back_none': 'All backend workflows are reachable — exposed as an endpoint or scheduled internally.',
+  'opt_none': 'All Option Sets are in use.',
+  'plug_none_orphan': 'No orphaned plugins — every installed plugin has identified usage.',
+  'plug_none_cfg': 'No plugins in this situation.',
+  'sty_none': 'All styles are applied to at least one element.',
+  'dt_none_fields': 'All fields are in use.',
+  'wf_bce_none': 'All backend Custom Events are called.',
+  'wf_ce_none': 'All page/reusable Custom Events are called.',
+  'wf_orphan_none': 'No workflow is triggered by a deleted element.',
+  'wf_hidden_none': 'No workflow is triggered by a never-rendered element.',
  },
 }
 
@@ -1196,6 +1220,10 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
         return (f"<td class='cellchk'><input type='checkbox' class='delchk' "
                 f'data-key="{esc(key)}" data-label="{esc(label)}"></td>')
     del_h = f"<th class='cellchk'>{T['th_del']}</th>"
+
+    # every category renders a green all-clear note when the audit found nothing in it
+    def all_clear(msg):
+        return f"<div class='note note-green'>{msg}</div>"
 
     def prow(p):
         tag = f" <span class='tag'>{T['legacy']}</span>" if p['name_flag_old'] else ''
@@ -1243,6 +1271,8 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
     reuse_tbl = simple(reuse_hard, [T['th_reuse'], T['th_id']],
                        lambda r: [f"<span class='mono'>{esc(r['name'])}</span>", f"<span class='mono dim'>{esc(r['inner_id'])}</span>"],
                        keyfn=lambda r: ('reusable:' + str(r['inner_id']), r['name']))
+    reuse_block = (f"<p><strong>{len(reuse_hard)}</strong> {T['reuse_body']}</p>{reuse_tbl}"
+                   if reuse_hard else all_clear(T['reuse_none']))
     reuse_tbl_t = simple(reuse_trans, [T['th_reuse'], T['th_id']],
                          lambda r: [f"<span class='mono'>{esc(r['name'])}</span>", f"<span class='mono dim'>{esc(r['inner_id'])}</span>"],
                          keyfn=lambda r: ('reusable:' + str(r['inner_id']), r['name'])) if reuse_trans else ''
@@ -1259,12 +1289,22 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
         f"<td><span class='vbadge v-orange'>{T['nav_trans']}</span></td><td class='mono dim'>{esc(r['inner_id'])}</td>"
         f"{chk('workflow:'+str(r['inner_id']), r['wf_name'])}</tr>"
         for r in back_trans)
+    back_block = ((
+        f"<div class=\"filter\"><input id=\"bf\" placeholder=\"{T['filter_wf']}\" oninput=\"fb()\">"
+        f"<span class=\"pill on\" data-k=\"all\" onclick=\"bk(this)\">{T['all']} ({len(back_hard) + len(back_trans)})</span>"
+        f"<span class=\"pill\" data-k=\"hard\" onclick=\"bk(this)\">{T['direct']} ({len(back_hard)})</span>"
+        f"<span class=\"pill\" data-k=\"trans\" onclick=\"bk(this)\">{T['trans']} ({len(back_trans)})</span></div>"
+        f"<div class=\"scroll\"><table id=\"btab\"><thead><tr><th>{T['th_wf']}</th><th>{T['th_folder']}</th>"
+        f"<th>{T['th_sit']}</th><th>{T['th_id']}</th>{del_h}</tr></thead><tbody>{back_rows}</tbody></table></div>")
+        if (back_hard or back_trans) else all_clear(T['back_none']))
     opt_tbl = simple(opt_unused, [T['th_os'], T['th_osd']],
                      lambda r: [f"<span class='mono'>{esc(r['name'])}</span>", esc(r['display'])],
-                     keyfn=lambda r: ('optionset:' + str(r['name']), r['name']))
+                     keyfn=lambda r: ('optionset:' + str(r['name']), r['name'])) \
+              if opt_unused else all_clear(T['opt_none'])
     sty_tbl = simple(sty_unused, [T['th_styt'], T['th_sty'], T['th_styid']],
                      lambda r: [f"<span class='tag'>{esc(r['stype'])}</span>", esc(r['display']), f"<span class='mono dim'>{esc(r['id'])}</span>"],
-                     keyfn=lambda r: ('style:' + str(r['id']), r['display'] or r['id']))
+                     keyfn=lambda r: ('style:' + str(r['id']), r['display'] or r['id'])) \
+              if sty_unused else all_clear(T['sty_none'])
     # unused color / font variables (design tokens)
     vcolors = (variables or {}).get('colors', {'unused': [], 'active': 0, 'deleted': 0})
     vfonts = (variables or {}).get('fonts', {'unused': [], 'active': 0, 'deleted': 0})
@@ -1302,6 +1342,9 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
                     f"<td class='mono dim'>{esc(r['id'])}</td><td class='mono'>{esc(r['version'])}</td>"
                     f"<td class='dim'>{esc(r['reason'])}</td>{chk('plugin:'+str(r['id']), r['name'] or r['id'])}</tr>" for r in rows)
         return f"<table><thead><tr><th>{T['th_plug']}</th><th>ID</th><th>{T['th_ver']}</th><th>{T['th_obs']}</th>{del_h}</tr></thead><tbody>{b}</tbody></table>"
+    plug_orphan_tbl = plug_tbl(plug_orphan) if plug_orphan else all_clear(T['plug_none_orphan'])
+    plug_cfg_block = (f"<div class='note note-amber'>{T['plug_cfg_b']}</div>{plug_tbl(plug_cfg)}"
+                      if plug_cfg else all_clear(T['plug_none_cfg']))
     # in-use plugins: reference list only (kept), name + marketplace link, no checkbox
     plug_used_rows = plug_used_list or []
     plug_used_tbl = (f"<div class='scroll'><table><thead><tr><th>{T['th_plug']}</th><th>ID</th><th>{T['th_ver']}</th></tr></thead><tbody>"
@@ -1330,6 +1373,18 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
                 f"<td>{api}</td>{chk('field:' + r['type_key'] + '.' + r['field_key'], (r['type_display'] or '') + ' > ' + (r['display'] or r['field_key']))}</tr>")
     dt_field_rows = ''.join(dt_field_row(r, 'unused') for r in dtF['candidates']) + ''.join(dt_field_row(r, 'api') for r in dtF['exposed'])
     n_fcand, n_fexp = len(dtF['candidates']), len(dtF['exposed'])
+    if n_fcand + n_fexp:
+        dt_fields_block = (
+            (f"<div class='note note-amber'>{n_fexp} {T['dt_exposed_note']}</div>" if n_fexp else '')
+            + f"<div class=\"filter\" id=\"datafilter\"><input id=\"df\" placeholder=\"{T['th_field']}…\" oninput=\"fd()\">"
+            + f"<span class=\"pill on\" data-f=\"all\" onclick=\"dv(this)\">{T['all']} ({n_fcand + n_fexp})</span>"
+            + f"<span class=\"pill\" data-f=\"unused\" onclick=\"dv(this)\">{T['st_unused']} ({n_fcand})</span>"
+            + f"<span class=\"pill\" data-f=\"api\" onclick=\"dv(this)\">{T['st_api']} ({n_fexp})</span></div>"
+            + f"<div class=\"scroll\"><table id=\"dtab\"><thead><tr><th>{T['th_table']}</th><th>{T['th_field']}</th>"
+            + f"<th>{T['th_key']}</th><th>{T['th_ftype']}</th><th>{T['th_api']}</th>{del_h}</tr></thead>"
+            + f"<tbody>{dt_field_rows}</tbody></table></div>")
+    else:
+        dt_fields_block = all_clear(T['dt_none_fields'])
 
     # ---- workflow audit (section 8 + backend 3b) ----
     wf = wfaudit or {'backend_ce': [], 'page_ce': [], 'orphan': [], 'hidden': []}
@@ -1338,17 +1393,17 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
     wf_bce_tbl = ''.join(f"<tr><td class='mono'>{esc(r['name'])}</td><td class='mono dim'>{esc(r['id'])}</td>"
                          f"{chk('customevent:' + str(r['id']), r['name'])}</tr>" for r in wf['backend_ce'])
     wf_bce_tbl = (f"<table><thead><tr><th>{T['th_event']}</th><th>{T['th_id']}</th>{del_h}</tr></thead><tbody>{wf_bce_tbl}</tbody></table>"
-                  if wf['backend_ce'] else f"<div class='note note-green'>{T['wf_none']}</div>")
+                  if wf['backend_ce'] else f"<div class='note note-green'>{T['wf_bce_none']}</div>")
     wf_ce_tbl = ''.join(f"<tr><td class='mono'>{esc(r['name'])}</td><td>{esc(r['container'])} {kindtag(r['kind'])}</td>"
                         f"<td class='mono dim'>{esc(r['id'])}</td>{chk('customevent:' + str(r['id']), (r['container'] or '') + ' › ' + (r['name'] or ''))}</tr>"
                         for r in wf['page_ce'])
     wf_ce_tbl = (f"<table><thead><tr><th>{T['th_event']}</th><th>{T['th_container']}</th><th>{T['th_id']}</th>{del_h}</tr></thead><tbody>{wf_ce_tbl}</tbody></table>"
-                 if wf['page_ce'] else f"<div class='note note-green'>{T['wf_none']}</div>")
+                 if wf['page_ce'] else f"<div class='note note-green'>{T['wf_ce_none']}</div>")
     wf_orphan_tbl = ''.join(f"<tr><td>{esc(r['container'])} {kindtag(r['kind'])}</td><td><span class='tag'>{esc(r['trigger'])}</span></td>"
                             f"<td class='mono dim'>{esc(r['element_id'])}</td>{chk('pagewf:' + str(r['id']), (r['container'] or '') + ' · ' + (r['trigger'] or ''))}</tr>"
                             for r in wf['orphan'])
     wf_orphan_tbl = (f"<table><thead><tr><th>{T['th_container']}</th><th>{T['th_trigger']}</th><th>{T['th_id']} (elem)</th>{del_h}</tr></thead><tbody>{wf_orphan_tbl}</tbody></table>"
-                     if wf['orphan'] else f"<div class='note note-green'>{T['wf_none']}</div>")
+                     if wf['orphan'] else f"<div class='note note-green'>{T['wf_orphan_none']}</div>")
     def hidden_reason(r):
         if r.get('reason') == 'ancestor':
             return f"<span class='vbadge v-orange'>{T['wf_h_anc']}</span> <span class='mono'>{esc(r.get('blocker'))}</span>"
@@ -1357,6 +1412,12 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
                             f"<td class='mono'>{esc(r['element'])}</td><td>{hidden_reason(r)}</td>"
                             f"{chk('hiddenwf:' + str(r['id']), (r['container'] or '') + ' · ' + (r.get('element') or ''))}</tr>"
                             for r in wf['hidden'])
+    wf_hidden_block = ((
+        f"<div class=\"note note-amber\">{T['wf_hidden_b']}</div>"
+        f"<div class=\"filter\"><input id=\"hf\" placeholder=\"{T['th_container']} / {T['th_elem']}…\" oninput=\"fh()\"></div>"
+        f"<div class=\"scroll\"><table id=\"htab\"><thead><tr><th>{T['th_container']}</th><th>{T['th_trigger']}</th>"
+        f"<th>{T['th_elem']}</th><th>{T['th_reason']}</th>{del_h}</tr></thead><tbody>{wf_hidden_tbl}</tbody></table></div>")
+        if wf['hidden'] else all_clear(T['wf_hidden_none']))
 
     # ---- API Connector calls (section 9) ----
     apc = apicalls or {'total': 0, 'used': 0, 'providers': 0, 'unused': []}
@@ -1364,9 +1425,10 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
                        f"<td><span class='tag'>{esc(r['method'])}</span></td><td class='mono dim'>{esc(r['ref'])}</td>"
                        f"{chk('apicall:' + str(r['ref']), (r['provider'] or '') + ' › ' + (r['call'] or ''))}</tr>"
                        for r in apc['unused'])
-    api_tbl = (f"<div class='scroll'><table id='atab'><thead><tr><th>{T['th_provider']}</th><th>{T['th_endpoint']}</th>"
+    api_tbl = (f"<div class=\"filter\"><input id=\"af\" placeholder=\"{T['filter_api']}\" oninput=\"fa()\"></div>"
+               f"<div class='scroll'><table id='atab'><thead><tr><th>{T['th_provider']}</th><th>{T['th_endpoint']}</th>"
                f"<th>{T['th_method']}</th><th>Ref</th>{del_h}</tr></thead><tbody>{api_rows}</tbody></table></div>") \
-              if apc['unused'] else f"<div class='note note-green'>{T['api_none']}</div>"
+              if apc['unused'] else all_clear(T['api_none'])
 
     # ---- ghost plugin references (section 10) ----
     gh = ghosts or {'refs': [], 'plugin_count': 0, 'plugins': []}
@@ -1381,9 +1443,14 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
                          f"<td class='mono'>{esc(r['location'])}</td>"
                          f"{chk('ghostref:' + r['plugin_id'] + ':' + (r['container'] or '') + ':' + (r['location'] or ''), (r['plugin_name'] or r['plugin_id']) + ' — ' + (r['container'] or ''))}</tr>"
                          for r in gh['refs'])
-    ghost_tbl = (f"<div class='scroll'><table id='gtab'><thead><tr><th>{T['th_plug']}</th><th>{T['th_container']}</th>"
-                 f"<th>{T['th_where']}</th><th>{T['th_loc']}</th>{del_h}</tr></thead><tbody>{ghost_rows}</tbody></table></div>") \
-                if gh['refs'] else f"<div class='note note-green'>{T['ghost_none']}</div>"
+    ghost_block = ((
+        f"<div class=\"note note-amber\">{T['ghost_body']}</div>"
+        f"<p><strong>{len(gh['refs'])}</strong> " + 'referências · ' + str(gh['plugin_count']) + ' plugins: '
+        + ', '.join((esc(p['name'] or p['id'][:14]) + ' (' + str(p['count']) + ')') for p in gh['plugins']) + '</p>'
+        f"<div class=\"filter\"><input id=\"gf\" placeholder=\"{T['filter_ghost']}\" oninput=\"fg2()\"></div>"
+        f"<div class='scroll'><table id='gtab'><thead><tr><th>{T['th_plug']}</th><th>{T['th_container']}</th>"
+        f"<th>{T['th_where']}</th><th>{T['th_loc']}</th>{del_h}</tr></thead><tbody>{ghost_rows}</tbody></table></div>")
+        if gh['refs'] else all_clear(T['ghost_none']))
 
     caveat = T['caveat_pages'].format(L=dyn['ListGoToPage'], D=dyn['dynamic_page_name'])
     refurl_block = ''
@@ -1394,6 +1461,19 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
             for p in ref_url_pages)
         refurl_block = (f"<div class='note note-green'><strong>{len(ref_url_pages)} · {T['refurl_t']}.</strong> {T['refurl_b']}</div>"
                         f"<table><thead><tr><th>{T['th_page']}</th><th>{T['th_hits']}</th><th>{T['th_ev']}</th></tr></thead><tbody>{body}</tbody></table>")
+    if unused_pages:
+        pages_block = (
+            f'<div class="note note-amber">{caveat}</div>{refurl_block}'
+            + (('<div class=cards>'
+                f'<div class="card k-red"><div class="big">{n_conf}</div><div class="lab">' + T['confirmed'] + '</div></div>'
+                f'<div class="card k-orange"><div class="big">{n_cand}</div><div class="lab">' + T['candidate'] + '</div></div>'
+                f'<div class="card k-green"><div class="big">{n_inuse}</div><div class="lab">' + T['inuse'] + '</div></div>'
+                '</div>') if page_audit else '')
+            + f'<div class="filter"><input id="pf" placeholder="{T["filter_page"]}" oninput="fp()">{verdict_pills}</div>'
+            + f'<div class="scroll"><table id="ptab"><thead><tr><th>{T["th_page"]}</th>{class_hdr}<th>{T["th_id"]}</th>{del_h}</tr></thead>'
+            + f'<tbody>{"".join(prow(p) for p in unused_pages)}</tbody></table></div>')
+    else:
+        pages_block = all_clear(T['pages_none']) + refurl_block
     total_pages = len(pages)
     return f"""<!doctype html><html lang="{lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(app_name)} — {T['title']}</title>
@@ -1463,19 +1543,10 @@ tr.done td:not(.cellchk){{opacity:.4;text-decoration:line-through}}
 </div>
 
 <h2 id="p">{T['s_pages']}</h2><p class="q">{T['q_pages']}</p>
-<div class="note note-amber">{caveat}</div>
-{refurl_block}
-{('<div class=cards>'
-  f'<div class="card k-red"><div class="big">{n_conf}</div><div class="lab">'+T['confirmed']+'</div></div>'
-  f'<div class="card k-orange"><div class="big">{n_cand}</div><div class="lab">'+T['candidate']+'</div></div>'
-  f'<div class="card k-green"><div class="big">{n_inuse}</div><div class="lab">'+T['inuse']+'</div></div>'
-  '</div>') if page_audit else ''}
-<div class="filter"><input id="pf" placeholder="{T['filter_page']}" oninput="fp()">{verdict_pills}</div>
-<div class="scroll"><table id="ptab"><thead><tr><th>{T['th_page']}</th>{class_hdr}<th>{T['th_id']}</th>{del_h}</tr></thead>
-<tbody>{''.join(prow(p) for p in unused_pages)}</tbody></table></div>
+{pages_block}
 
 <h2 id="r">{T['s_reuse']}</h2><p class="q">{T['q_reuse']}</p>
-<p><strong>{len(reuse_hard)}</strong> {T['reuse_body']}</p>{reuse_tbl}
+{reuse_block}
 {('<h3>+ '+str(len(reuse_trans))+' transitive</h3>'+reuse_tbl_t) if reuse_trans else ''}
 {('<h3>'+T['dup_reuse_t']+' ('+str(len(reuse_dup))+')</h3><div class="note note-amber">'+T['dup_reuse_b']+'</div>'+reuse_tbl_dup) if reuse_dup else ''}
 
@@ -1484,11 +1555,7 @@ tr.done td:not(.cellchk){{opacity:.4;text-decoration:line-through}}
 <div class="cards"><div class="card k-red"><div class="big">{len(back_hard)}</div><div class="lab">{T['direct']}</div></div>
 <div class="card k-orange"><div class="big">{len(back_trans)}</div><div class="lab">{T['trans']}</div></div>
 <div class="card k-green"><div class="big">{exposed}</div><div class="lab">{T['exposed']}</div></div></div>
-<div class="filter"><input id="bf" placeholder="{T['filter_wf']}" oninput="fb()">
-<span class="pill on" data-k="all" onclick="bk(this)">{T['all']} ({len(back_hard)+len(back_trans)})</span>
-<span class="pill" data-k="hard" onclick="bk(this)">{T['direct']} ({len(back_hard)})</span>
-<span class="pill" data-k="trans" onclick="bk(this)">{T['trans']} ({len(back_trans)})</span></div>
-<div class="scroll"><table id="btab"><thead><tr><th>{T['th_wf']}</th><th>{T['th_folder']}</th><th>{T['th_sit']}</th><th>{T['th_id']}</th>{del_h}</tr></thead><tbody>{back_rows}</tbody></table></div>
+{back_block}
 <h3>3b · {T['wf_bce_t']} ({len(wf['backend_ce'])})</h3><p class="dim">{T['wf_bce_b']}</p>{wf_bce_tbl}
 
 <h2 id="o">{T['s_opt']}</h2><p class="q">{T['q_opt']}</p>
@@ -1497,8 +1564,8 @@ tr.done td:not(.cellchk){{opacity:.4;text-decoration:line-through}}
 <h2 id="pl">{T['s_plug']}</h2><p class="q">{T['q_plug']}</p>
 {('<div class="note note-red"><strong>💲 '+str(len(unused_paid))+' '+T['plug_paid_alert']+'</strong><ul>'+''.join('<li><strong>'+esc(p['name'] or p['id'])+'</strong>'+((' — '+esc(p['price'])) if p.get('price') else '')+((' ('+esc(p['pricing_model'])+')') if p.get('pricing_model') else '')+'</li>' for p in unused_paid)+'</ul></div>') if unused_paid else ''}
 <p><strong>{plug_used}</strong>/{plug_total} {T['plug_used']}</p>
-<h3>{T['plug_orphan_t']} ({len(plug_orphan)})</h3><p class="dim">{T['plug_orphan_b']}</p>{plug_tbl(plug_orphan)}
-<h3>{T['plug_cfg_t']} ({len(plug_cfg)})</h3><div class="note note-amber">{T['plug_cfg_b']}</div>{plug_tbl(plug_cfg)}
+<h3>{T['plug_orphan_t']} ({len(plug_orphan)})</h3><p class="dim">{T['plug_orphan_b']}</p>{plug_orphan_tbl}
+<h3>{T['plug_cfg_t']} ({len(plug_cfg)})</h3>{plug_cfg_block}
 <h3>{T['plug_used_t']} ({len(plug_used_rows)})</h3><p class="dim">{T['plug_used_b']}</p>{plug_used_tbl}
 
 <h2 id="s">{T['s_sty']}</h2><p class="q">{T['q_sty']}</p>
@@ -1511,13 +1578,7 @@ tr.done td:not(.cellchk){{opacity:.4;text-decoration:line-through}}
 <div class="note note-blue">{dtF['deleted']} {T['dt_deleted_note']} {dtT['deleted']} {T['dt_tables_deleted']} {dtT['exposed']} {T['dt_exposed_tables']}</div>
 <h3>{T['dt_tables_t']} ({len(dtT['unused'])})</h3><p class="dim">{T['dt_tables_b']}</p>{dt_tables_tbl}
 <h3>{T['dt_fields_t']} ({n_fcand})</h3><p>{T['dt_fields_b']}</p>
-{('<div class="note note-amber">'+str(n_fexp)+' '+T['dt_exposed_note']+'</div>') if n_fexp else ''}
-<div class="filter" id="datafilter"><input id="df" placeholder="{T['th_field']}…" oninput="fd()">
-<span class="pill on" data-f="all" onclick="dv(this)">{T['all']} ({n_fcand + n_fexp})</span>
-<span class="pill" data-f="unused" onclick="dv(this)">{T['st_unused']} ({n_fcand})</span>
-<span class="pill" data-f="api" onclick="dv(this)">{T['st_api']} ({n_fexp})</span></div>
-<div class="scroll"><table id="dtab"><thead><tr><th>{T['th_table']}</th><th>{T['th_field']}</th><th>{T['th_key']}</th><th>{T['th_ftype']}</th><th>{T['th_api']}</th>{del_h}</tr></thead>
-<tbody>{dt_field_rows}</tbody></table></div>
+{dt_fields_block}
 
 <h2 id="w">{T['s_wf']}</h2><p class="q">{T['q_wf']}</p>
 <h3>{T['wf_ce_t']} ({len(wf['page_ce'])})</h3><p class="dim">{T['wf_ce_b']}</p>
@@ -1525,20 +1586,14 @@ tr.done td:not(.cellchk){{opacity:.4;text-decoration:line-through}}
 <h3>{T['wf_orphan_t']} ({len(wf['orphan'])})</h3><p class="dim">{T['wf_orphan_b']}</p>
 <div class="scroll">{wf_orphan_tbl}</div>
 <h3>{T['wf_hidden_t']} ({len(wf['hidden'])})</h3>
-<div class="note note-amber">{T['wf_hidden_b']}</div>
-<div class="filter"><input id="hf" placeholder="{T['th_container']} / {T['th_elem']}…" oninput="fh()"></div>
-<div class="scroll"><table id="htab"><thead><tr><th>{T['th_container']}</th><th>{T['th_trigger']}</th><th>{T['th_elem']}</th><th>{T['th_reason']}</th>{del_h}</tr></thead><tbody>{wf_hidden_tbl}</tbody></table></div>
+{wf_hidden_block}
 
 <h2 id="ap">{T['s_api']}</h2><p class="q">{T['q_api']}</p>
 <p><strong>{len(apc['unused'])}</strong> / {apc['total']}. {T['api_body']}</p>
-<div class="filter"><input id="af" placeholder="{T['filter_api']}" oninput="fa()"></div>
 {api_tbl}
 
 <h2 id="g">{T['s_ghost']}</h2><p class="q">{T['q_ghost']}</p>
-<div class="note note-amber">{T['ghost_body']}</div>
-<p><strong>{len(gh['refs'])}</strong> {('referências · '+str(gh['plugin_count'])+' plugins: '+', '.join((esc(p['name'] or p['id'][:14])+' ('+str(p['count'])+')') for p in gh['plugins'])) if gh['refs'] else ''}</p>
-<div class="filter"><input id="gf" placeholder="{T['filter_ghost']}" oninput="fg2()"></div>
-{ghost_tbl}
+{ghost_block}
 
 <h2 id="m">{T['method']}</h2>
 <div class="note note-blue"><p>Pages: id interno referenced by <code>ChangePage</code>/<code>Link.page</code>/<code>MobileNavigate</code> or anywhere in content.

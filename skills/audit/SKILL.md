@@ -209,5 +209,7 @@ want a durable/committable record. When regenerating the report later, pass that
 
 The script already emits a complete, self-contained HTML report — interactive filters, confidence
 badges, a deletion-tracker toolbar, per-category tables, a methodology/limits section, light/dark
-theming, print CSS. Point the user to that file rather than rebuilding a report in the chat. Use the
+theming, print CSS. Every category where the audit found nothing renders a green all-clear note
+("Todos os X estão em uso.") instead of an empty table, so a clean section is an explicit positive
+result, not a blank. Point the user to that file rather than rebuilding a report in the chat. Use the
 stdout summary (and `--json`) for your own narration and any follow-up analysis.
