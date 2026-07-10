@@ -583,13 +583,13 @@ def analyze_ghost_plugins(data, registry=None):
                     deepact(wf.get('actions'))
     long = lambda pid: ('x' in pid) and pid[:4].isdigit()
     for r in refs:
-        r['plugin_name'] = registry.get(r['plugin_id']) or ''
+        r['plugin_name'] = (registry.get(r['plugin_id']) or {}).get('name') or ''
         r['url'] = 'https://bubble.io/plugin/' + r['plugin_id'] if long(r['plugin_id']) else ''
     refs.sort(key=lambda r: ((r['plugin_name'] or r['plugin_id']).lower(), (r['container'] or '').lower(), r['where']))
     from collections import Counter as _C
     by_plugin = _C(r['plugin_id'] for r in refs)
     return {'refs': refs, 'plugin_count': len(by_plugin),
-            'plugins': [{'id': pid, 'name': registry.get(pid) or '', 'count': c,
+            'plugins': [{'id': pid, 'name': (registry.get(pid) or {}).get('name') or '', 'count': c,
                          'url': ('https://bubble.io/plugin/' + pid) if long(pid) else ''}
                         for pid, c in by_plugin.most_common()]}
 
@@ -845,17 +845,25 @@ HEADLESS_PLUGINS = {
 }
 
 def load_plugin_registry(extra_path=None):
-    """Marketplace plugin-id -> display name. Loads the bundled references/plugin_names.json
-    (IDs are marketplace-global, so it's reusable across projects) plus an optional override
-    file. Keeps null values so 'looked-up-but-delisted' can be distinguished from 'unknown'."""
+    """Marketplace plugin-id -> {'name', 'delisted'}. Loads the bundled
+    references/plugin_names.json (IDs are marketplace-global, so it's reusable across projects)
+    plus an optional override file. Accepted value forms in the JSON:
+      "Name"                                  known, listed plugin
+      null                                    looked up but marketplace page gone (delisted, name unknown)
+      {"name": "Name", "delisted": true}      delisted but the name is known (e.g. from the app owner)
+    """
     reg = {}
     here = os.path.dirname(os.path.abspath(__file__))
     for p in (os.path.join(here, '..', 'references', 'plugin_names.json'), extra_path):
         if p and os.path.exists(p):
             try:
                 for k, v in json.load(open(p, encoding='utf-8')).items():
-                    if not k.startswith('_'):
-                        reg[k] = v
+                    if k.startswith('_'):
+                        continue
+                    if isinstance(v, dict):
+                        reg[k] = {'name': v.get('name'), 'delisted': bool(v.get('delisted'))}
+                    else:
+                        reg[k] = {'name': v, 'delisted': v is None}
             except Exception:
                 pass
     return reg
@@ -895,11 +903,12 @@ def analyze_plugins(data, content_raw, registry=None, pricing=None):
         tcount = sum(c for t, c in types.items()
                      if t == pid or t.startswith(pid + '-') or t.startswith(pid + '.'))
         is_long = ('x' in pid) and pid[:4].isdigit()
-        name = KNOWN_PLUGINS.get(pid) or registry.get(pid) or ''
+        rv = registry.get(pid) or {}
+        name = KNOWN_PLUGINS.get(pid) or rv.get('name') or ''
         pr = pricing.get(pid) or {}
         base = {'id': pid, 'version': str(ver), 'name': name,
                 'url': ('https://bubble.io/plugin/' + pid) if is_long else '',
-                'delisted': bool(is_long and not name and pid in registry),
+                'delisted': bool(is_long and rv.get('delisted')),
                 'paid': pr.get('status') == 'paid',
                 'price': pr.get('price') or '', 'pricing_model': pr.get('model') or ''}
         if tcount > 0:  # has an element/action/API call placed -> in use
