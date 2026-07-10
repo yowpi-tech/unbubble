@@ -1198,13 +1198,23 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
     del_h = f"<th class='cellchk'>{T['th_del']}</th>"
 
     def prow(p):
-        cls, lbl = VB.get(p['verdict'], ('v-gray', T['nostatus']))
         tag = f" <span class='tag'>{T['legacy']}</span>" if p['name_flag_old'] else ''
-        st = f"<td>{esc(p['status_text'])}</td>" if page_audit else ''
-        return (f"<tr data-v='{p['verdict']}'><td class='mono'>{esc(p['name'])}{tag}</td>"
-                f"<td><span class='vbadge {cls}'>{esc(lbl)}</span></td>{st}"
+        # classification/status columns only exist when the user supplied a page-audit CSV;
+        # without one the audit is .bubble-only and there is no verdict to show
+        if page_audit:
+            cls, lbl = VB.get(p['verdict'], ('v-gray', T['nostatus']))
+            klass = f"<td><span class='vbadge {cls}'>{esc(lbl)}</span></td><td>{esc(p['status_text'])}</td>"
+        else:
+            klass = ''
+        return (f"<tr data-v='{p['verdict']}'><td class='mono'>{esc(p['name'])}{tag}</td>{klass}"
                 f"<td class='mono dim'>{esc(p['inner_id'])}</td>{chk('page:'+str(p['inner_id']), p['name'])}</tr>")
-    sheet_hdr = f"<th>{T['th_sit']}</th>" if page_audit else ''
+    class_hdr = f"<th>{T['th_class']}</th><th>{T['th_sit']}</th>" if page_audit else ''
+    verdict_pills = ((
+        f'<span class="pill on" data-v="all" onclick="pv(this)">{T["all"]} ({len(unused_pages)})</span>'
+        f'<span class="pill" data-v="confirmed-dead" onclick="pv(this)">{T["confirmed"]} ({n_conf})</span>'
+        f'<span class="pill" data-v="candidate" onclick="pv(this)">{T["candidate"]} ({n_cand})</span>'
+        f'<span class="pill" data-v="in-use" onclick="pv(this)">{T["inuse"]} ({n_inuse})</span>'
+    ) if page_audit else '')
     # sort key that ignores leading emoji/symbols (❌ ♻️ 🧩 …) so names sort by their first letter
     def _nk(s):
         return re.sub(r'^[^\w]+', '', (s or '')).lower()
@@ -1460,12 +1470,8 @@ tr.done td:not(.cellchk){{opacity:.4;text-decoration:line-through}}
   f'<div class="card k-orange"><div class="big">{n_cand}</div><div class="lab">'+T['candidate']+'</div></div>'
   f'<div class="card k-green"><div class="big">{n_inuse}</div><div class="lab">'+T['inuse']+'</div></div>'
   '</div>') if page_audit else ''}
-<div class="filter"><input id="pf" placeholder="{T['filter_page']}" oninput="fp()">
-<span class="pill on" data-v="all" onclick="pv(this)">{T['all']} ({len(unused_pages)})</span>
-<span class="pill" data-v="confirmed-dead" onclick="pv(this)">{T['confirmed']} ({n_conf})</span>
-<span class="pill" data-v="candidate" onclick="pv(this)">{T['candidate']} ({n_cand})</span>
-<span class="pill" data-v="in-use" onclick="pv(this)">{T['inuse']} ({n_inuse})</span></div>
-<div class="scroll"><table id="ptab"><thead><tr><th>{T['th_page']}</th><th>{T['th_class']}</th>{sheet_hdr}<th>{T['th_id']}</th>{del_h}</tr></thead>
+<div class="filter"><input id="pf" placeholder="{T['filter_page']}" oninput="fp()">{verdict_pills}</div>
+<div class="scroll"><table id="ptab"><thead><tr><th>{T['th_page']}</th>{class_hdr}<th>{T['th_id']}</th>{del_h}</tr></thead>
 <tbody>{''.join(prow(p) for p in unused_pages)}</tbody></table></div>
 
 <h2 id="r">{T['s_reuse']}</h2><p class="q">{T['q_reuse']}</p>
