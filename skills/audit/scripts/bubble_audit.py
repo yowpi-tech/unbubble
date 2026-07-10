@@ -659,7 +659,9 @@ def analyze_workflows(data):
       action anywhere.
     - Element-triggered workflows (ButtonClicked, InputChanged, Popup*, plugin element events, …)
       fire on interaction with `properties.element_id` (which points to an element's `id` FIELD,
-      not its dict key). Two ways such a trigger can never fire:
+      not its dict key). The container's own root id (container['id']) counts as an existing,
+      always-displayable element — popup-rooted reusables trigger on it ("When popup closed").
+      Two ways such a trigger can never fire:
         * ORPHAN: the element_id resolves to no element -> the element was deleted (high confidence).
         * NEVER RENDERED: the trigger element is never displayable. An element "can be visible" if
           its default `is_visible` is true, OR a Show/Toggle/Animate action targets it, OR a
@@ -701,6 +703,16 @@ def analyze_workflows(data):
     def elem_maps(container):
         """Return (name, parent, can_visible, never_rendered) for a page/reusable's element tree."""
         name, parent, canvis = {}, {}, {}
+        # The container's OWN root id (a reusable's popup/group root, a page's root) is a valid
+        # trigger target: "When <this popup> is closed/opened" inside a popup-rooted reusable binds
+        # to it. It lives at container['id'], NOT inside container['elements'] — without this seed
+        # every such self-referencing trigger is falsely flagged as "element deleted". Visibility
+        # of a reusable root is decided per placed instance, so it is never statically hidden.
+        rid = container.get('id')
+        if rid:
+            name[rid] = container.get('name') or rid
+            parent[rid] = None
+            canvis[rid] = True
         def w(elements, par):
             if isinstance(elements, dict):
                 for el in elements.values():
