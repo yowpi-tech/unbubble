@@ -1,0 +1,11 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "unbubble",
+  "version": "1.0.0",
+  "description": "UnBubble — a 3-step pipeline to take an app OFF Bubble.io: (1) audit — find & report unused/dead entities in a .bubble export so the project can be cleaned and re-exported lean; (2) clone — reverse-engineer the lean export into full as-is technical documentation (database, external APIs, plugins, Data API, backend workflows, pages & business rules) and a clone PRD; (3) level-up — assess tech debt, design a state-of-the-art target architecture (security & reliability first), and produce the data-migration plan + AI-ready rebuild pack.",
+  "author": {
+    "name": "Marlon Trettin",
+    "email": "marlon@yowpi.com"
+  },
+  "skills": "./skills/"
+}

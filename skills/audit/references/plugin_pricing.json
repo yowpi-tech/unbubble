@@ -1,0 +1,243 @@
+{
+  "_comment": "Bubble marketplace plugin ID -> pricing {status: free|paid|unknown, model, price}. Marketplace-global, reusable across projects. Pricing is NOT in the .bubble export; researched from the marketplace/vendor. Only mark status=paid with a concrete source. Add newly-found ones here.",
+  "1479901297703x967536405834891300": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1486333606381x563772386943434750": {
+    "status": "free",
+    "model": "free",
+    "price": "free (donation-supported)"
+  },
+  "1494464159228x621608555717853200": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1494584598068x558733147672412200": {
+    "status": "unknown",
+    "model": "unknown",
+    "price": ""
+  },
+  "1503656388355x494537099888295940": {
+    "status": "free",
+    "model": "free",
+    "price": "Free (donations optional)"
+  },
+  "1504084136074x936250845148217300": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1506754440043x429432871224606700": {
+    "status": "unknown",
+    "model": "unknown",
+    "price": ""
+  },
+  "1506856292688x472987456954695700": {
+    "status": "paid",
+    "model": "subscription",
+    "price": "$5/mo or $50 one-time"
+  },
+  "1515740964274x743012569880985600": {
+    "status": "unknown",
+    "model": "unknown",
+    "price": ""
+  },
+  "1525426707840x910405967468298200": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1525453812081x174875062776627200": {
+    "status": "paid",
+    "model": "subscription",
+    "price": "~$7/mo (one-time option …"
+  },
+  "1528945119672x548812376057577500": {
+    "status": "free",
+    "model": "free",
+    "price": "free (vendor integration…"
+  },
+  "1531024299355x489711521333772300": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1532997348558x797819075821568000": {
+    "status": "paid",
+    "model": "subscription",
+    "price": "$6/mo or $60 once"
+  },
+  "1535398233486x238989697769013250": {
+    "status": "free",
+    "model": "free",
+    "price": "Free"
+  },
+  "1543169685024x571194097926930400": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1544798294930x973076470769909800": {
+    "status": "paid",
+    "model": "subscription",
+    "price": "$4/mo"
+  },
+  "1557241599197x311227033793855500": {
+    "status": "free",
+    "model": "free",
+    "price": "free (donationware)"
+  },
+  "1568299250417x684448291308175400": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1574978038763x786941160914944000": {
+    "status": "unknown",
+    "model": "unknown",
+    "price": ""
+  },
+  "1579120809486x684082880588546000": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1582624865073x914259503648079900": {
+    "status": "unknown",
+    "model": "unknown",
+    "price": ""
+  },
+  "1585612696870x563919365787090940": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1586417026456x360184924969369600": {
+    "status": "free",
+    "model": "free",
+    "price": "free (open-source)"
+  },
+  "1609444246883x924984661248573400": {
+    "status": "unknown",
+    "model": "unknown",
+    "price": ""
+  },
+  "1609741808612x465610886017450000": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1610512915958x681138150746095600": {
+    "status": "free",
+    "model": "free",
+    "price": "free (plugin); Pathfix s…"
+  },
+  "1610853886518x530204331045552100": {
+    "status": "unknown",
+    "model": "unknown",
+    "price": ""
+  },
+  "1610861756769x514842713965461500": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1612453140820x328809596850274300": {
+    "status": "free",
+    "model": "free",
+    "price": "free to install (Pathfix…"
+  },
+  "1617158035643x870588050789630000": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1619408686811x303682060679381000": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1627149818654x508797293775028200": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1631494650490x682060150719119400": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1631818528605x812939911340228600": {
+    "status": "paid",
+    "model": "subscription",
+    "price": "assinatura"
+  },
+  "1634450366879x496005256191672300": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1636452512080x727372363131781100": {
+    "status": "free",
+    "model": "free",
+    "price": "free (plugin install); r…"
+  },
+  "1642860987916x663125148641001500": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1643847782395x597625793912766500": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1651636444081x933610778959544300": {
+    "status": "unknown",
+    "model": "unknown",
+    "price": ""
+  },
+  "1658181838561x862832580805263400": {
+    "status": "free",
+    "model": "free",
+    "price": "Free"
+  },
+  "1658585318378x553742900542832600": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1667758971605x316889048071536640": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1668592568219x992066942110007300": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1674005247729x181795081330884600": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1674724169956x553440902986596350": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1682579469490x402667891631063000": {
+    "status": "free",
+    "model": "free",
+    "price": "free"
+  },
+  "1690219773500x932899701316911100": {
+    "status": "free",
+    "model": "free",
+    "price": "Free"
+  }
+}

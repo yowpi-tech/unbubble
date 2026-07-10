@@ -1,0 +1,1722 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+bubble_audit.py — static "unused entities" audit for a Bubble.io app export (.bubble).
+
+Finds, with confidence levels:
+  1. Pages         never navigated to / referenced internally
+  2. Reusables     element definitions never placed anywhere
+  3. Backend WFs   API workflows neither exposed as an endpoint nor scheduled/triggered
+  4. Option Sets   not referenced by any expression, field, element or workflow
+  5. Plugins       installed but with no element/action/API-call/config usage
+  6. Styles        not referenced by any element's `style` property
+
+A .bubble export is one giant single-line JSON. Every cross-reference between
+entities is stored as the target's id inside a quoted string (dict key or value),
+and ids are globally unique — so counting quoted-token occurrences (minus an
+entity's own definition) is a collision-safe "is it referenced?" test. Where a
+first-class reference field exists (custom_id, api_event, option.<name>, style),
+we use it directly and add the quoted-token count as a safety net.
+
+Usage:
+  python3 bubble_audit.py path/to/export.bubble
+  python3 bubble_audit.py export.bubble --out report.html --json results.json
+  python3 bubble_audit.py export.bubble --pages-csv page_audit.csv --lang pt
+
+The script is dependency-free (Python 3.8+ standard library only).
+"""
+import argparse, csv, html, json, os, re, sys
+from collections import Counter, defaultdict
+
+# ------------------------------------------------------------------ helpers
+def log(*a):
+    print(*a, file=sys.stderr)
+
+# Sections that represent real, live app content (used for usage scanning).
+# Excluded on purpose: _index (editor metadata: id_to_path / issues_list),
+# comments (editor notes), holding_pen (the deleted-elements bin — referencing
+# something from the trash must NOT count as "used"), screenshot, snapshots.
+CONTENT_KEYS = ['pages', 'element_definitions', 'api', 'option_sets', 'styles',
+                'settings', 'user_types', 'mobile_views']
+
+def build_index(data):
+    """Return (content_raw, quoted_counter) for usage scanning."""
+    content = {k: data.get(k) for k in CONTENT_KEYS}
+    content_raw = json.dumps(content, separators=(',', ':'))
+    quoted = Counter(re.findall(r'"([A-Za-z0-9_]+)"', content_raw))
+    return content_raw, quoted
+
+def refs_elsewhere(idstr, own_obj, quoted):
+    """Quoted occurrences of idstr across content MINUS those inside its own object."""
+    if not idstr:
+        return 0
+    total = quoted.get(idstr, 0)
+    own = json.dumps(own_obj, separators=(',', ':'))
+    return total - own.count('"' + idstr + '"')
+
+def walk(o, fn):
+    """Depth-first walk calling fn(node) on every dict."""
+    if isinstance(o, dict):
+        fn(o)
+        for v in o.values():
+            walk(v, fn)
+    elif isinstance(o, list):
+        for v in o:
+            walk(v, fn)
+
+def build_def_names(data):
+    """Reusable-definition inner `id` -> its CURRENT name. Used to label reusable
+    instances (CustomElement) by the live definition rather than a stale snapshot."""
+    out = {}
+    for dv in (data.get('element_definitions') or {}).values():
+        if isinstance(dv, dict) and dv.get('id'):
+            out[dv['id']] = dv.get('name')
+    return out
+
+_INSTANCE_LETTER = re.compile(r'\s+([A-Z]{1,6})$')
+_BBCODE = re.compile(r'\[/?[a-zA-Z][^\]]*\]')  # Bubble rich-text markup: [ul] [li] [color=…] …
+
+def _element_content(el):
+    """The static caption / text / placeholder the Bubble editor shows for a
+    content-bearing element (Button caption, Text content, Input placeholder), or
+    None. These live in `properties`, never in default_name. Rich-text markup is
+    stripped and whitespace collapsed; purely-dynamic content returns None."""
+    props = el.get('properties') if isinstance(el.get('properties'), dict) else {}
+    for key in ('text', 'caption', 'placeholder'):
+        v = props.get(key)
+        s = None
+        if isinstance(v, str):
+            s = v
+        elif isinstance(v, dict) and isinstance(v.get('entries'), dict):
+            z = v['entries'].get('0')  # entries.0 = the leading static run of a TextExpression
+            s = z if isinstance(z, str) else None
+        if s and s.strip():
+            s = ' '.join(_BBCODE.sub('', s).split())
+            if s:
+                return s
+    return None
+
+def _type_word(el):
+    """Human element-type word ("Button", "Text", "MultiDropdown") — the default_name
+    with its trailing instance letters stripped; falls back to the raw `type`."""
+    dn = el.get('default_name')
+    if isinstance(dn, str) and dn:
+        return _INSTANCE_LETTER.sub('', dn).strip() or dn
+    t = el.get('type')
+    return t if isinstance(t, str) else ''
+
+def editor_name(el, fallback=None, def_names=None):
+    """The element name AS SHOWN IN THE BUBBLE EDITOR's element tree.
+
+    Resolution order (mirrors what the editor displays):
+      1. Reusable-element INSTANCE (type CustomElement) -> the reusable's CURRENT
+         name via `properties.custom_id` (+ the frozen instance letter). Its baked
+         default_name/name/custom_definition_name all snapshot at placement and go
+         STALE when the definition is renamed (463/1442 instances here have a stale
+         default_name; `name` is stale for most too), so the live definition is the
+         only reliable label. Drops genuine per-instance renames (a small minority,
+         string-indistinguishable from stale auto-names).
+      2. An explicit user `name` (the custom label, e.g. "date Start", "g list").
+      3. A content-bearing element with NO custom name -> "<Type> <caption/text/
+         placeholder>" (e.g. a button captioned "Issue receipt" shows as "Button
+         Issue receipt"). The editor derives this live from `properties`; it is NOT
+         in default_name. Confirmed on real exports: stored names match "<Type> <caption>"
+         far more often than the bare caption. Without this, an unnamed button reads as "Button H".
+      4. `default_name` ("Button H", "Group A") for content-less unnamed elements.
+
+    Empty strings are treated as absent. def_names (inner-id -> current reusable
+    name) enables step 1; omit it to skip reusable resolution."""
+    if not isinstance(el, dict):
+        return fallback
+    if def_names:
+        props = el.get('properties') if isinstance(el.get('properties'), dict) else {}
+        cid = props.get('custom_id')
+        cur = def_names.get(cid) if cid else None
+        if cur and cur.strip():
+            cur = cur.rstrip()
+            m = _INSTANCE_LETTER.search(el.get('default_name') or '')
+            return cur + (' ' + m.group(1) if m else '')
+    n = el.get('name')
+    if n:
+        return n
+    content = _element_content(el)
+    if content:
+        tw = _type_word(el)
+        label = (tw + ' ' + content).strip() if tw else content
+        return label if len(label) <= 60 else label[:59].rstrip() + '…'
+    return el.get('default_name') or el.get('custom_definition_name') or fallback
+
+def app_domains(data):
+    """The app's own web domains, used to recognize internal page URLs."""
+    cs = data.get('settings', {}).get('client_safe', {}) or {}
+    doms = []
+    td = cs.get('app_topdomain')
+    if isinstance(td, str) and '.' in td:
+        doms.append(td)
+    appid = data.get('_id')
+    if isinstance(appid, str) and appid:
+        doms.append(appid + '.bubbleapps.io')  # Bubble default domain
+    return doms
+
+# A string leaf is worth searching for page-URL references if it looks like a path/tag/script.
+_URLISH = re.compile(r'/|<[a-zA-Z!/]|location\.|window\.|href|src=|\.io|\.com|\.app|http')
+
+def build_url_corpus(data):
+    """Concatenate every string leaf that looks like a URL/HTML/JS fragment.
+
+    Pages can be linked by NAME (their URL slug) inside free text that the id-based
+    navigation scan never sees: hardcoded Link/OpenURL URLs, Run-JavaScript action code,
+    HTML embed elements, per-page html_header, and app custom headers. That content is
+    stored inside nested expression structures, so we collect string leaves recursively.
+    """
+    parts = []
+    def rec(o):
+        if isinstance(o, str):
+            if len(o) > 2 and _URLISH.search(o):
+                parts.append(o)
+        elif isinstance(o, dict):
+            for v in o.values():
+                rec(v)
+        elif isinstance(o, list):
+            for v in o:
+                rec(v)
+    rec({k: data.get(k) for k in CONTENT_KEYS})
+    return '\n'.join(parts)
+
+# A string leaf worth searching for data field/type references (JS/HTML/code blocks).
+_CODEISH = re.compile(r'<[a-zA-Z/!]|function|=>|\.get\(|location\.|window\.|document\.|http|\bvar\b|\blet\b|\bconst\b|bubble|\$\(|;')
+
+def build_script_corpus(data):
+    """String leaves that look like JS/HTML/code — where a data field/type could be referenced
+    by name outside Bubble's structured expressions (Run JavaScript, HTML embeds, headers)."""
+    parts = []
+    def rec(o):
+        if isinstance(o, str):
+            if len(o) > 12 and _CODEISH.search(o):
+                parts.append(o)
+        elif isinstance(o, dict):
+            for v in o.values():
+                rec(v)
+        elif isinstance(o, list):
+            for v in o:
+                rec(v)
+    rec({k: data.get(k) for k in ('pages', 'element_definitions', 'api')})
+    return '\n'.join(parts)
+
+# ------------------------------------------------------------------ analyses
+def analyze_pages(data, quoted, url_corpus, domains):
+    pages = data.get('pages', {})
+    # entry points reachable by definition (system pages / URL roots)
+    SYSTEM = {'index', '404', 'reset_pw', 'login'}
+    OLD_RE = re.compile(r'(_old|_bkp|_backup|_copy|_test|_v\d|_deprecated|_delete|❌|old_|test_|copy_| copy|_bak|_legacy|_20\d{2})', re.I)
+    # regex prefix that matches this app's page-URL form: (www.)?<domain>/[version-xxx/]
+    dom_alt = '|'.join(re.escape(d) for d in domains) if domains else r'(?!x)x'
+    APP_URL = r'(?:www\.)?(?:' + dom_alt + r')/(?:version-[A-Za-z0-9_-]+/)?'
+    rows = []
+    for wk, pv in pages.items():
+        if not isinstance(pv, dict):
+            continue
+        iid = pv.get('id')
+        name = pv.get('name')
+        r = refs_elsewhere(iid, pv, quoted)
+        is_system = name in SYSTEM
+        no_id_nav = (r <= 0 and not is_system)
+        # For no-id-nav pages, also look for the NAME as an internal page URL in scripts/links/HTML.
+        url_hits, snippet = 0, ''
+        if no_id_nav and name:
+            pat = APP_URL + re.escape(name) + r'(?![A-Za-z0-9_-])'
+            m = re.search(pat, url_corpus)
+            if m:
+                url_hits = len(re.findall(pat, url_corpus))
+                i = m.start()
+                snippet = re.sub(r'\s+', ' ', url_corpus[max(0, i - 45):i + len(name) + 45]).replace('\\', '')
+        rows.append({'wrapper': wk, 'inner_id': iid, 'name': name, 'refs': r,
+                     'is_system': is_system, 'name_flag_old': bool(OLD_RE.search(name or '')),
+                     'name_url_hits': url_hits, 'name_url_snippet': snippet,
+                     'referenced_by_url': (no_id_nav and url_hits > 0),
+                     'unused': (no_id_nav and url_hits == 0)})
+    # dynamic-navigation caveat counters
+    dyn = {'dynamic_page_name': 0, 'ListGoToPage': 0}
+    def cnt(n):
+        t = n.get('type')
+        p = n.get('properties', {})
+        if t == 'ChangePage' and isinstance(p, dict) and 'dynamic_page_name' in p:
+            dyn['dynamic_page_name'] += 1
+        if t == 'ListGoToPage':
+            dyn['ListGoToPage'] += 1
+    walk({k: data.get(k) for k in ('pages', 'element_definitions')}, cnt)
+    return rows, dyn
+
+def analyze_reusables(data, quoted):
+    defs = data.get('element_definitions', {})
+    # Exclude already-deleted definitions entirely (like option sets / fields / tables). Bubble
+    # usually drops deleted reusables from the export or moves them to holding_pen rather than
+    # flagging them, but if an export DOES carry deleted:true, a deleted reusable must not be
+    # considered "unused" — it's already gone.
+    meta = {wk: {'inner_id': v.get('id'), 'name': v.get('name')}
+            for wk, v in defs.items() if isinstance(v, dict) and not v.get('deleted')}
+    iid2wrapper = {m['inner_id']: wk for wk, m in meta.items()}
+    # collect placements: container -> set(placed definition inner_ids)
+    edges = defaultdict(set)
+    def collect(elements, container):
+        if not isinstance(elements, dict):
+            return
+        for el in elements.values():
+            if isinstance(el, dict):
+                if el.get('type') == 'CustomElement':
+                    cid = (el.get('properties') or {}).get('custom_id')
+                    if cid:
+                        edges[container].add(cid)
+                collect(el.get('elements'), container)
+    for wk, pv in data.get('pages', {}).items():
+        if isinstance(pv, dict):
+            collect(pv.get('elements'), 'PAGE:' + wk)
+    for wk, dv in defs.items():
+        if isinstance(dv, dict) and not dv.get('deleted'):
+            collect(dv.get('elements'), 'DEF:' + wk)
+    for mk, mv in data.get('mobile_views', {}).items():
+        if isinstance(mv, dict):
+            collect(mv.get('elements'), 'MOBILE:' + mk)
+    all_placed = set().union(*edges.values()) if edges else set()
+    # reachability from pages/mobile (catch definitions only nested in dead defs)
+    roots = set()
+    for c, cids in edges.items():
+        if c.startswith('PAGE') or c.startswith('MOBILE'):
+            roots |= cids
+    reachable, frontier = set(), set(roots)
+    while frontier:
+        nxt = set()
+        for iid in frontier:
+            if iid in reachable:
+                continue
+            reachable.add(iid)
+            wk = iid2wrapper.get(iid)
+            if wk:
+                nxt |= edges.get('DEF:' + wk, set())
+        frontier = nxt - reachable
+    # Same-name detection. Bubble's reusable search matches by NAME, and the editor can end up
+    # with two reusables sharing an exact name (e.g. a leftover duplicate). If an unplaced
+    # reusable has a same-named twin that IS live, it *looks* used in Bubble (the twin's usages
+    # show under it) and deleting the wrong one is easy — so never present it as a clean delete.
+    name_to_iids = defaultdict(list)
+    for m in meta.values():
+        name_to_iids[m['name']].append(m['inner_id'])
+    rows = []
+    for wk, m in meta.items():
+        iid = m['inner_id']
+        r = refs_elsewhere(iid, defs[wk], quoted)
+        placed = iid in all_placed
+        hard = (not placed and r <= 0)
+        trans = (placed and iid not in reachable)
+        twins = [t for t in name_to_iids.get(m['name'], []) if t != iid]
+        twin_used_id = next((t for t in twins if t in reachable), None)
+        dup_conflict = bool((hard or trans) and twin_used_id)
+        rows.append({'name': m['name'], 'inner_id': iid,
+                     'unused_hard': (hard and not dup_conflict),
+                     'unused_transitive': (trans and not dup_conflict),
+                     'reachable': iid in reachable,
+                     'dup_name_conflict': dup_conflict, 'twin_used_id': twin_used_id})
+    return rows
+
+def analyze_backend(data, quoted):
+    api = data.get('api', {})
+    folders = (data.get('settings', {}).get('client_safe', {}) or {}).get('api_wf_folder_list', {}) or {}
+    # scheduled targets from ANYWHERE, and specifically from page/def (client) contexts
+    sched_all, sched_client = set(), set()
+    def grab(node, into):
+        if node.get('type') in ('ScheduleAPIEvent', 'ScheduleAPIEventOnList'):
+            tv = (node.get('properties') or {}).get('api_event')
+            if isinstance(tv, str):
+                into.add(tv)
+    walk(data, lambda n: grab(n, sched_all))
+    for pv in data.get('pages', {}).values():
+        if isinstance(pv, dict):
+            walk(pv.get('elements'), lambda n: grab(n, sched_client))
+            walk(pv.get('workflows'), lambda n: grab(n, sched_client))
+    for dv in data.get('element_definitions', {}).values():
+        if isinstance(dv, dict):
+            walk(dv.get('elements'), lambda n: grab(n, sched_client))
+            walk(dv.get('workflows'), lambda n: grab(n, sched_client))
+    # per-workflow scheduling edges (for transitive reachability)
+    edges = defaultdict(set)
+    apievent_ids = set()
+    rows = []
+    for wk, v in api.items():
+        if not isinstance(v, dict) or v.get('type') != 'APIEvent':
+            continue
+        iid = v.get('id')
+        if not iid:
+            continue
+        apievent_ids.add(iid)
+        p = v.get('properties', {}) or {}
+        walk(v.get('actions'), lambda n, s=iid: grab(n, edges[s]))
+        rows.append({'inner_id': iid, 'wf_name': p.get('wf_name'),
+                     'folder': folders.get(p.get('wf_folder'), '(no folder)'),
+                     'expose': bool(p.get('expose')),
+                     'scheduled': iid in sched_all,
+                     'refs': refs_elsewhere(iid, v, quoted)})
+    # roots = exposed endpoints + workflows scheduled from client side
+    roots = {r['inner_id'] for r in rows if r['expose']} | (sched_client & apievent_ids)
+    reach, frontier = set(), set(roots)
+    while frontier:
+        nxt = set()
+        for iid in frontier:
+            if iid in reach:
+                continue
+            reach.add(iid)
+            nxt |= (edges.get(iid, set()) & apievent_ids)
+        frontier = nxt - reach
+    exposed = 0
+    for r in rows:
+        if r['expose']:
+            exposed += 1
+        r['unused_hard'] = (not r['expose'] and not r['scheduled'] and r['refs'] <= 0)
+        r['unused_transitive'] = (not r['expose'] and r['inner_id'] not in reach and not r['unused_hard'])
+    return rows, exposed
+
+def analyze_optionsets(data, content_raw):
+    opt = data.get('option_sets', {})
+    rows = []
+    for name, ov in opt.items():
+        if not isinstance(ov, dict):
+            continue
+        deleted = bool(ov.get('deleted'))
+        n = content_raw.count('option.' + name)
+        rows.append({'name': name, 'display': ov.get('display'), 'deleted': deleted,
+                     'ref_count': n, 'unused': (n == 0 and not deleted)})
+    return rows
+
+def analyze_styles(data, content_raw):
+    styles = data.get('styles', {})
+    cs = data.get('settings', {}).get('client_safe', {}) or {}
+    default_ids = set((cs.get('default_styles') or {}).values())
+    used = set()
+    def collect(elements):
+        if not isinstance(elements, dict):
+            return
+        for el in elements.values():
+            if isinstance(el, dict):
+                s = el.get('style')
+                if isinstance(s, str):
+                    used.add(s)
+                collect(el.get('elements'))
+    for pv in data.get('pages', {}).values():
+        if isinstance(pv, dict):
+            collect(pv.get('elements'))
+    for dv in data.get('element_definitions', {}).values():
+        if isinstance(dv, dict):
+            collect(dv.get('elements'))
+    for mv in data.get('mobile_views', {}).values():
+        if isinstance(mv, dict):
+            collect(mv.get('elements'))
+    rows = []
+    for sid, sv in styles.items():
+        if not isinstance(sv, dict):
+            continue
+        is_default = sid in default_ids
+        # authoritative pattern: an element referencing a style stores "style":"<id>"
+        occ = content_raw.count('"style":"' + sid + '"')
+        rows.append({'id': sid, 'display': sv.get('display'), 'stype': sv.get('type'),
+                     'unused': (sid not in used and not is_default and occ == 0)})
+    return rows
+
+def analyze_datatypes(data, quoted, content_raw, script_corpus):
+    """Unused data types (tables) and fields.
+
+    A field is referenced by its (mangled) key in the app-logic sections; a type by
+    "custom.<key>". A field/type is 'used' if referenced beyond its own declaration, or
+    exposed in the native Data API (`exposed_api`), or named in a JS/HTML script. We keep
+    the Data-API-exposed ones in a separate bucket because they may have external consumers.
+    """
+    ut = data.get('user_types', {})
+    custom = {k: v for k, v in ut.items() if isinstance(v, dict) and 'display' in v}
+    # type references: "custom.<key>"
+    custom_quoted = Counter(re.findall(r'"(custom\.[A-Za-z0-9_]+)"', content_raw))
+    # how many types declare each field key (to subtract declarations from the ref count)
+    decls = Counter()
+    for tv in custom.values():
+        for fk, fv in (tv.get('fields') or {}).items():
+            if isinstance(fv, dict):
+                decls[fk] += 1
+    def field_used(fk):
+        return (quoted.get(fk, 0) - decls.get(fk, 0)) > 0
+
+    # ---- fields ----
+    fld_candidates, fld_exposed, fld_script = [], [], []
+    deleted_fields = 0
+    for tk, tv in custom.items():
+        if tv.get('deleted'):
+            continue  # its table is already trashed
+        exposed = bool(tv.get('exposed_api'))
+        tdisp = tv.get('display') or tk
+        for fk, fv in (tv.get('fields') or {}).items():
+            if not isinstance(fv, dict):
+                continue
+            if fv.get('deleted'):
+                deleted_fields += 1
+                continue
+            if field_used(fk):
+                continue
+            row = {'type_key': tk, 'type_display': tdisp, 'field_key': fk,
+                   'display': fv.get('display'), 'ftype': fv.get('value'),
+                   'exposed': exposed, 'shared': decls.get(fk, 0) > 1}
+            if fk in script_corpus:            # referenced by name in a JS/HTML script -> keep
+                fld_script.append(row)
+            elif exposed:                      # only reachable via the Data API -> verify
+                fld_exposed.append(row)
+            else:                              # unreferenced anywhere -> candidate
+                fld_candidates.append(row)
+
+    # ---- types (tables) ----
+    unused_types, exposed_only_types, deleted_types = [], [], 0
+    for tk, tv in custom.items():
+        if tv.get('deleted'):
+            deleted_types += 1
+            continue
+        exposed = bool(tv.get('exposed_api'))
+        cu = custom_quoted.get('custom.' + tk, 0)
+        active_f = [fk for fk, fv in (tv.get('fields') or {}).items()
+                    if isinstance(fv, dict) and not fv.get('deleted')]
+        anyfield = any(field_used(fk) for fk in active_f)
+        in_script = ('custom.' + tk) in script_corpus
+        used_internally = cu > 0 or anyfield or tk == 'user' or in_script
+        entry = {'type_key': tk, 'display': tv.get('display') or tk, 'active_fields': len(active_f),
+                 'ref': cu, 'exposed': exposed}
+        if not used_internally and not exposed:
+            unused_types.append(entry)
+        elif not used_internally and exposed:
+            exposed_only_types.append(entry)
+
+    def sort_by_type(rows):
+        return sorted(rows, key=lambda r: ((r['type_display'] or '').lower(), r['display'] or ''))
+    return {
+        'types': {'active': len(custom) - deleted_types, 'deleted': deleted_types,
+                  'exposed': sum(1 for v in custom.values() if v.get('exposed_api') and not v.get('deleted')),
+                  'unused': sorted(unused_types, key=lambda r: (r['display'] or '').lower()),
+                  'exposed_only': exposed_only_types},
+        'fields': {'candidates': sort_by_type(fld_candidates), 'exposed': sort_by_type(fld_exposed),
+                   'script': fld_script, 'deleted': deleted_fields,
+                   'active': len(fld_candidates) + len(fld_exposed) + len(fld_script)
+                             + sum(len([1 for fk, fv in (tv.get('fields') or {}).items()
+                                        if isinstance(fv, dict) and not fv.get('deleted') and field_used(fk)])
+                                   for tv in custom.values() if not tv.get('deleted'))},
+    }
+
+def analyze_ghost_plugins(data, registry=None):
+    """Plugins REMOVED from the project but still referenced. A plugin element/action carries the
+    type `<pluginId>-<suffix>`. If that plugin id is NOT in `settings.client_safe.plugins` (the
+    installed list), the plugin was uninstalled while its elements/actions remained — a broken /
+    ghost reference. Report each occurrence with the plugin name, the page/reusable, and the
+    element or workflow where it lives."""
+    registry = registry or {}
+    installed = set((data.get('settings', {}).get('client_safe', {}) or {}).get('plugins', {}) or {})
+    def_names = build_def_names(data)
+    PID = re.compile(r'^(\d{13}x\d+)-')
+    def ghost(t):
+        if not isinstance(t, str):
+            return None
+        m = PID.match(t)
+        return m.group(1) if (m and m.group(1) not in installed) else None
+    refs = []
+    for kind, coll in (('page', data.get('pages', {})), ('reusable', data.get('element_definitions', {}))):
+        for v in coll.values():
+            if not isinstance(v, dict):
+                continue
+            cname = v.get('name') or ''
+            id2name = {}
+            def mapn(e):
+                if isinstance(e, dict):
+                    for el in e.values():
+                        if isinstance(el, dict):
+                            if el.get('id'):
+                                id2name[el['id']] = editor_name(el, el['id'], def_names)
+                            mapn(el.get('elements'))
+            mapn(v.get('elements'))
+            def walkel(e):
+                if isinstance(e, dict):
+                    for el in e.values():
+                        if isinstance(el, dict):
+                            g = ghost(el.get('type'))
+                            if g:
+                                refs.append({'plugin_id': g, 'container': cname, 'kind': kind,
+                                             'where': 'element', 'location': editor_name(el, el.get('id'), def_names)})
+                            walkel(el.get('elements'))
+            walkel(v.get('elements'))
+            wfs = v.get('workflows')
+            if isinstance(wfs, dict):
+                for wf in wfs.values():
+                    if not isinstance(wf, dict):
+                        continue
+                    p = wf.get('properties', {}) if isinstance(wf.get('properties'), dict) else {}
+                    eid = p.get('element_id')
+                    lbl = p.get('event_name') or p.get('wf_name') or \
+                        ((id2name.get(eid, eid) + ' ' if eid else '') + '(' + (wf.get('type') or '?') + ')')
+                    if ghost(wf.get('type')):
+                        refs.append({'plugin_id': ghost(wf.get('type')), 'container': cname, 'kind': kind,
+                                     'where': 'trigger', 'location': lbl})
+                    seen_here = set()
+                    def deepact(o):
+                        if isinstance(o, dict):
+                            g = ghost(o.get('type'))
+                            if g and (g, lbl) not in seen_here:
+                                seen_here.add((g, lbl))
+                                refs.append({'plugin_id': g, 'container': cname, 'kind': kind,
+                                             'where': 'action', 'location': lbl})
+                            for x in o.values():
+                                deepact(x)
+                        elif isinstance(o, list):
+                            for x in o:
+                                deepact(x)
+                    deepact(wf.get('actions'))
+    long = lambda pid: ('x' in pid) and pid[:4].isdigit()
+    for r in refs:
+        r['plugin_name'] = registry.get(r['plugin_id']) or ''
+        r['url'] = 'https://bubble.io/plugin/' + r['plugin_id'] if long(r['plugin_id']) else ''
+    refs.sort(key=lambda r: ((r['plugin_name'] or r['plugin_id']).lower(), (r['container'] or '').lower(), r['where']))
+    from collections import Counter as _C
+    by_plugin = _C(r['plugin_id'] for r in refs)
+    return {'refs': refs, 'plugin_count': len(by_plugin),
+            'plugins': [{'id': pid, 'name': registry.get(pid) or '', 'count': c,
+                         'url': ('https://bubble.io/plugin/' + pid) if long(pid) else ''}
+                        for pid, c in by_plugin.most_common()]}
+
+def analyze_api_calls(data):
+    """API Connector calls declared but never invoked.
+
+    `settings.client_safe.apiconnector2` = {apiId: {human: <provider name>, calls: {callId: {name,
+    url, method, ...}}, auth...}}. A call is invoked as the `type` `apiconnector2-<apiId>.<callId>`
+    on an element data source (data call) or a workflow action (action call). A call is unused if
+    that type appears nowhere in the app logic. OAuth `token_call` / `oauth_user_data_call` calls
+    are invoked automatically by the auth flow (not via that type) — treat them as used.
+    """
+    ac = (data.get('settings', {}).get('client_safe', {}) or {}).get('apiconnector2', {}) or {}
+    applogic = json.dumps({k: data.get(k) for k in ('pages', 'element_definitions', 'api')}, separators=(',', ':'))
+    total, unused, providers = 0, [], set()
+    for apiid, api in ac.items():
+        if not isinstance(api, dict):
+            continue
+        calls = api.get('calls', {})
+        if not isinstance(calls, dict):
+            continue
+        human = api.get('human') or apiid
+        providers.add(apiid)
+        auth_calls = set()
+        if isinstance(api.get('oauth_user_data_call'), str):
+            auth_calls.add(api['oauth_user_data_call'])
+        for cid in calls:
+            if 'token' in cid.lower():
+                auth_calls.add(cid)
+        for callid, call in calls.items():
+            if not isinstance(call, dict):
+                continue
+            total += 1
+            ref = apiid + '.' + callid
+            invoked = ('apiconnector2-' + ref) in applogic
+            is_auth = callid in auth_calls or 'token' in (call.get('name') or '').lower()
+            if invoked or is_auth:
+                continue
+            unused.append({'provider': human, 'call': call.get('name') or callid, 'ref': ref,
+                           'method': (call.get('method') or '').upper()})
+    unused.sort(key=lambda r: ((r['provider'] or '').lower(), (r['call'] or '').lower()))
+    return {'total': total, 'used': total - len(unused), 'providers': len(providers), 'unused': unused}
+
+def analyze_workflows(data):
+    """Custom events never triggered, and page/reusable workflows whose trigger can't fire.
+
+    - Custom events (backend `api` type=CustomEvent, and page/reusable workflows type=CustomEvent)
+      are 'called' iff their id is the `custom_event` target of a Trigger/Schedule custom-event
+      action anywhere.
+    - Element-triggered workflows (ButtonClicked, InputChanged, Popup*, plugin element events, …)
+      fire on interaction with `properties.element_id` (which points to an element's `id` FIELD,
+      not its dict key). Two ways such a trigger can never fire:
+        * ORPHAN: the element_id resolves to no element -> the element was deleted (high confidence).
+        * NEVER RENDERED: the trigger element is never displayable. An element "can be visible" if
+          its default `is_visible` is true, OR a Show/Toggle/Animate action targets it, OR a
+          conditional (an entry in the element's `states`, i.e. the "Conditional" tab, whose
+          `properties` sets `is_visible`) can reveal it. An element is never rendered if IT or ANY
+          ANCESTOR can never be visible (a click target inside a group that never shows is dead too).
+    """
+    # custom_event trigger targets (the id a Trigger/Schedule custom-event action points to)
+    targets = set()
+    def collect_targets(o):
+        if isinstance(o, dict):
+            if o.get('type') in ('TriggerCustomEvent', 'ScheduleCustom', 'TriggerCustomEventFromReusable'):
+                tv = (o.get('properties') or {}).get('custom_event')
+                if isinstance(tv, str):
+                    targets.add(tv)
+            for v in o.values():
+                collect_targets(v)
+        elif isinstance(o, list):
+            for v in o:
+                collect_targets(v)
+    collect_targets(data)
+
+    # elements revealed by an action anywhere (id FIELD of the target)
+    shown = set()
+    def collect_shown(o):
+        if isinstance(o, dict):
+            if o.get('type') in ('ShowElement', 'ToggleElement', 'AnimateElement', 'AlertShowMessage'):
+                tid = (o.get('properties') or {}).get('element_id')
+                if tid:
+                    shown.add(tid)
+            for v in o.values():
+                collect_shown(v)
+        elif isinstance(o, list):
+            for v in o:
+                collect_shown(v)
+    collect_shown({k: data.get(k) for k in ('pages', 'element_definitions')})
+    def_names = build_def_names(data)  # for editor labels of reusable instances
+
+    def elem_maps(container):
+        """Return (name, parent, can_visible, never_rendered) for a page/reusable's element tree."""
+        name, parent, canvis = {}, {}, {}
+        def w(elements, par):
+            if isinstance(elements, dict):
+                for el in elements.values():
+                    if isinstance(el, dict):
+                        iid = el.get('id')
+                        if iid:
+                            p = el.get('properties', {}) if isinstance(el.get('properties'), dict) else {}
+                            sts = el.get('states') if isinstance(el.get('states'), dict) else {}
+                            # a conditional (state) that sets is_visible can reveal a hidden element
+                            cond_shows = any(isinstance(s, dict) and isinstance(s.get('properties'), dict)
+                                             and 'is_visible' in s['properties'] for s in sts.values())
+                            name[iid] = editor_name(el, iid, def_names)
+                            parent[iid] = par
+                            canvis[iid] = (p.get('is_visible', True) is not False) or (iid in shown) or cond_shows
+                        w(el.get('elements'), iid)
+        w(container.get('elements'), None)
+        memo = {}
+        def never_rendered(iid, seen=None):
+            if iid in memo:
+                return memo[iid]
+            seen = seen or set()
+            if iid in seen:
+                return False
+            seen.add(iid)
+            if iid not in canvis:      # unknown element -> don't over-flag
+                return False
+            if not canvis[iid]:
+                memo[iid] = True
+                return True
+            par = parent.get(iid)
+            r = never_rendered(par, seen) if par else False
+            memo[iid] = r
+            return r
+        # for a never-rendered element, find the nearest ancestor (incl self) that can never be visible
+        def blocking(iid):
+            cur = iid
+            while cur is not None:
+                if not canvis.get(cur, True):
+                    return cur
+                cur = parent.get(cur)
+            return iid
+        return name, canvis, never_rendered, blocking
+
+    backend_ce, page_ce, orphan, hidden = [], [], [], []
+    # backend custom events
+    for k, v in data.get('api', {}).items():
+        if isinstance(v, dict) and v.get('type') == 'CustomEvent':
+            iid = v.get('id')
+            p = v.get('properties', {}) if isinstance(v.get('properties'), dict) else {}
+            if iid and iid not in targets:
+                backend_ce.append({'id': iid, 'name': p.get('event_name') or p.get('wf_name') or iid,
+                                   'folder': p.get('wf_folder')})
+    # page/reusable workflows
+    for kind, coll in (('page', data.get('pages', {})), ('reusable', data.get('element_definitions', {}))):
+        for v in coll.values():
+            if not isinstance(v, dict):
+                continue
+            wfs = v.get('workflows')
+            if not isinstance(wfs, dict):
+                continue
+            cname = v.get('name') or ''
+            ename, canvis, never_rendered, blocking = elem_maps(v)
+            for wf in wfs.values():
+                if not isinstance(wf, dict):
+                    continue
+                t = wf.get('type') or ''
+                wid = wf.get('id')
+                p = wf.get('properties', {}) if isinstance(wf.get('properties'), dict) else {}
+                if t == 'CustomEvent':
+                    if wid and wid not in targets:
+                        page_ce.append({'id': wid, 'name': p.get('event_name') or p.get('wf_name') or wid,
+                                        'container': cname, 'kind': kind})
+                    continue
+                eid = p.get('element_id')
+                if not eid:
+                    continue  # lifecycle / non-element trigger (PageLoaded, LoggedIn, etc.) — can fire
+                if eid not in canvis:
+                    orphan.append({'id': wid, 'trigger': t, 'container': cname, 'kind': kind, 'element_id': eid})
+                elif never_rendered(eid):
+                    blk = blocking(eid)
+                    hidden.append({'id': wid, 'trigger': t, 'container': cname, 'kind': kind,
+                                   'element_id': eid, 'element': ename.get(eid, eid),
+                                   'reason': 'self' if blk == eid else 'ancestor',
+                                   'blocker': ename.get(blk, blk), 'blocker_id': blk})
+    key = lambda r: ((r.get('container') or '').lower(), (r.get('name') or r.get('element') or '').lower())
+    return {'backend_ce': sorted(backend_ce, key=lambda r: (r['name'] or '').lower()),
+            'page_ce': sorted(page_ce, key=key), 'orphan': sorted(orphan, key=key),
+            'hidden': sorted(hidden, key=key)}
+
+def analyze_variables(data, content_raw):
+    """Unused user-defined color and font VARIABLES (design tokens).
+
+    Defined in settings.client_safe.color_tokens_user / font_tokens_user ({id: {name, deleted...}}).
+    A variable is referenced as the CSS custom property `var(--color_<id>_<state>)` /
+    `var(--font_<id>_<state>)`. We must NOT count the bare id: token ids live in a separate
+    namespace and can collide with element ids, and the theme is snapshotted many times in the
+    export — both inflate a bare-id count massively. The `var(--color_<id>` / `var(--font_<id>`
+    form is collision- and snapshot-proof (definitions store rgba/font_family, not var() refs).
+    """
+    cs = data.get('settings', {}).get('client_safe', {}) or {}
+    colors = (cs.get('color_tokens_user', {}) or {}).get('default', {}) or {}
+    fonts = (cs.get('font_tokens_user', {}) or {}).get('default', {}) or {}
+
+    def used(prefix, vid):
+        return bool(re.search(r'var\(--' + prefix + '_' + re.escape(vid) + r'[_)]', content_raw))
+
+    def rows(tokens, prefix, extra_key):
+        out = []
+        for vid, v in tokens.items():
+            if not isinstance(v, dict) or v.get('deleted'):
+                continue
+            if used(prefix, vid):
+                continue
+            out.append({'id': vid, 'name': v.get('name') or vid, 'extra': v.get(extra_key)})
+        return sorted(out, key=lambda r: (r['name'] or '').lower())
+
+    def stats(tokens):
+        active = sum(1 for v in tokens.values() if isinstance(v, dict) and not v.get('deleted'))
+        deleted = sum(1 for v in tokens.values() if isinstance(v, dict) and v.get('deleted'))
+        return active, deleted
+
+    ca, cd = stats(colors)
+    fa, fd = stats(fonts)
+    return {'colors': {'active': ca, 'deleted': cd, 'unused': rows(colors, 'color', 'rgba')},
+            'fonts': {'active': fa, 'deleted': fd, 'unused': rows(fonts, 'font', 'font_family')}}
+
+# well-known short-name plugin labels (marketplace long-ids have no name in the export)
+KNOWN_PLUGINS = {
+    'ionic': 'Ionic elements', 'slack': 'Slack', 'google': 'Google (fonts/maps/OAuth)',
+    'chartjs': 'Chart.js', 'select2': 'Select / multi-dropdown', 'addtoany': 'AddToAny share',
+    'docusign': 'DocuSign', 'mailchimp': 'Mailchimp', 'selectPDF': 'SelectPDF', 'zapiernew': 'Zapier',
+    'dbconnector': 'SQL Database Connector', 'draggableui': 'Draggable Elements', 'progressbar': 'Progress Bar',
+    'appconnector': 'App Connector', 'fullcalendar': 'Full Calendar', 'apiconnector2': 'API Connector',
+    'materialicons': 'Material Icons', 'slickcarousel': 'Slick Slider/Carousel', 'multifileupload': 'Multi-File Uploader',
+}
+
+# Plugins that are active PROJECT-WIDE the moment they're installed and place NO element or action
+# in the app — so they have zero detectable footprint in the export yet are genuinely used. These
+# must never be flagged as safe-to-remove. id -> short reason. (Marketplace-global, like names.)
+HEADLESS_PLUGINS = {
+    '1568299250417x684448291308175400': 'Classify — applies CSS/styles to elements globally via the element ID; active project-wide once installed, never placed on a page',
+}
+
+def load_plugin_registry(extra_path=None):
+    """Marketplace plugin-id -> display name. Loads the bundled references/plugin_names.json
+    (IDs are marketplace-global, so it's reusable across projects) plus an optional override
+    file. Keeps null values so 'looked-up-but-delisted' can be distinguished from 'unknown'."""
+    reg = {}
+    here = os.path.dirname(os.path.abspath(__file__))
+    for p in (os.path.join(here, '..', 'references', 'plugin_names.json'), extra_path):
+        if p and os.path.exists(p):
+            try:
+                for k, v in json.load(open(p, encoding='utf-8')).items():
+                    if not k.startswith('_'):
+                        reg[k] = v
+            except Exception:
+                pass
+    return reg
+
+def load_plugin_pricing(extra_path=None):
+    """Marketplace plugin-id -> pricing {status: free|paid|unknown, model, price}. Bundled
+    references/plugin_pricing.json (marketplace-global) + optional override. Pricing is NOT in the
+    export — it's researched from the marketplace, so flag unused PAID plugins to alert the auditor
+    (recurring/wasted cost)."""
+    reg = {}
+    here = os.path.dirname(os.path.abspath(__file__))
+    for p in (os.path.join(here, '..', 'references', 'plugin_pricing.json'), extra_path):
+        if p and os.path.exists(p):
+            try:
+                for k, v in json.load(open(p, encoding='utf-8')).items():
+                    if not k.startswith('_') and isinstance(v, dict):
+                        reg[k] = v
+            except Exception:
+                pass
+    return reg
+
+def analyze_plugins(data, content_raw, registry=None, pricing=None):
+    registry = registry or {}
+    pricing = pricing or {}
+    cs = data.get('settings', {}).get('client_safe', {}) or {}
+    sec = data.get('settings', {}).get('secure', {}) or {}
+    plugins = cs.get('plugins', {}) or {}
+    setting_keys = [k for k in list(sec.keys()) + list(cs.keys()) if k != 'plugins']
+    dbq = cs.get('dbconnector_queries')
+    db_has_queries = isinstance(dbq, dict) and len(dbq) > 0
+    # count type usages once
+    types = Counter()
+    walk({k: data.get(k) for k in CONTENT_KEYS},
+         lambda n: types.update([n['type']]) if isinstance(n.get('type'), str) else None)
+    orphaned, configured, used_list = [], [], []
+    for pid, ver in plugins.items():
+        tcount = sum(c for t, c in types.items()
+                     if t == pid or t.startswith(pid + '-') or t.startswith(pid + '.'))
+        is_long = ('x' in pid) and pid[:4].isdigit()
+        name = KNOWN_PLUGINS.get(pid) or registry.get(pid) or ''
+        pr = pricing.get(pid) or {}
+        base = {'id': pid, 'version': str(ver), 'name': name,
+                'url': ('https://bubble.io/plugin/' + pid) if is_long else '',
+                'delisted': bool(is_long and not name and pid in registry),
+                'paid': pr.get('status') == 'paid',
+                'price': pr.get('price') or '', 'pricing_model': pr.get('model') or ''}
+        if tcount > 0:  # has an element/action/API call placed -> in use
+            used_list.append({**base, 'type_usages': tcount})
+            continue
+        occ = content_raw.count(pid)
+        cfg = [k for k in setting_keys if pid in k or k.startswith(pid + '_')]
+        entry = {**base, 'occ': occ, 'config_keys': len(cfg), 'headless': pid in HEADLESS_PLUGINS}
+        functional, reason = False, ''
+        zaps = (cs.get('zapier') or {}).get('zaps') if isinstance(cs.get('zapier'), dict) else None
+        if pid in HEADLESS_PLUGINS:
+            functional, reason = True, HEADLESS_PLUGINS[pid]  # global/headless -> keep, verify
+        elif pid in ('zapiernew', 'zapier') and zaps:
+            functional, reason = True, 'has %d Zap(s) configured (settings.zapier)' % len(zaps)
+        elif pid == 'dbconnector' and db_has_queries:
+            functional, reason = True, 'has %d SQL queries' % len(dbq)
+        elif pid == 'google' and occ > 100:
+            functional, reason = True, 'referenced %dx (fonts/maps/OAuth)' % occ
+        elif cfg:
+            functional, reason = True, 'has %d configured setting(s)' % len(cfg)
+        elif occ > 3:
+            functional, reason = True, 'referenced %dx in config/headers' % occ
+        entry['reason'] = reason or ('only in install registry (%d occ)' % occ)
+        (configured if functional else orphaned).append(entry)
+    # PAID first (most important to flag), then alphabetical; unnamed ones last by id
+    pkey = lambda r: (not r.get('paid'), not r['name'], (r['name'] or r['id']).lower())
+    orphaned.sort(key=pkey)
+    configured.sort(key=pkey)
+    used_list.sort(key=lambda r: (not r['name'], (r['name'] or r['id']).lower()))
+    return orphaned, configured, used_list, len(plugins)
+
+# ------------------------------------------------------------------ page CSV cross-reference
+def load_page_audit(path, name_col, status_cols):
+    """Return name -> {'row': {...}, 'verdict': confirmed-dead|candidate|in-use|None}."""
+    rows = list(csv.DictReader(open(path, encoding='utf-8-sig')))
+    if not rows:
+        return {}
+    cols = list(rows[0].keys())
+    ncol = name_col or cols[0]
+    scols = status_cols or [c for c in cols if re.search(r'status|usage|action|state|deprecat', c, re.I)]
+    DEAD = re.compile(r'deprecat|delete|unused|not used|remove|obsolet|morto|excluir|descontinu', re.I)
+    MAYBE = re.compile(r'maybe|review|check|needed|revisar|talvez|verificar|see if', re.I)
+    LIVE = re.compile(r'in use|active|keep|live|em uso|manter|ativo|produç', re.I)
+    out = {}
+    for r in rows:
+        nm = (r.get(ncol) or '').strip()
+        if not nm:
+            continue
+        blob = ' '.join((r.get(c) or '') for c in scols)
+        # Precedence is chosen for safety and intent, not first-match:
+        #  - LIVE wins first: never auto-mark a page the team calls "in use" as dead
+        #    (these are the direct-URL / embed entry points with no internal nav).
+        #  - MAYBE next: "maybe delete" / "see if needed" is uncertainty -> candidate,
+        #    even though it contains the word "delete".
+        #  - DEAD last: only when nothing signals live/uncertain.
+        verdict = None
+        if LIVE.search(blob):
+            verdict = 'in-use'
+        elif MAYBE.search(blob):
+            verdict = 'candidate'
+        elif DEAD.search(blob):
+            verdict = 'confirmed-dead'
+        out[nm] = {'row': r, 'verdict': verdict, 'status_text': blob.strip()}
+    return out
+
+# ------------------------------------------------------------------ progress state (round-trips with the report's Export)
+def load_state(path):
+    """Parse a .md (report Export) or .json progress file into a set of '<category>:<id>' keys."""
+    if not path or not os.path.exists(path):
+        return set()
+    txt = open(path, encoding='utf-8').read()
+    if path.lower().endswith('.json'):
+        try:
+            j = json.loads(txt)
+            arr = j if isinstance(j, list) else j.get('deleted', [])
+            return set(arr)
+        except Exception:
+            return set()
+    return set(re.findall(r'-\s*\[[xX]\]\s*`([^`]+)`', txt))  # only checked (- [x]) lines
+
+# ------------------------------------------------------------------ HTML report
+STR = {
+ 'pt': {
+  'title': 'Relatório de elementos não utilizados', 'sub_src': 'Análise estática do export Bubble',
+  'generated': 'gerado em', 'how_title': 'Como ler este relatório',
+  'how_body': 'Cada item tem um grau de confiança. Em Bubble, “não referenciado” nem sempre significa “seguro para excluir”: páginas têm URL pública própria (podem ser abertas por link direto, e-mail ou iframe/embed) e plugins podem rodar no servidor sem elemento visível. Backend workflows, option sets, reutilizáveis e estilos têm sinais determinísticos e alta confiança.',
+  'c_pages': 'Páginas sem navegação interna', 'c_reuse': 'Reutilizáveis não usados',
+  'c_back': 'Backend workflows inalcançáveis', 'c_opt': 'Option Sets sem uso',
+  'c_plug': 'Plugins órfãos', 'c_sty': 'Estilos não usados', 'of': 'de',
+  's_pages': '1 · Páginas que podem ser excluídas',
+  'q_pages': 'Quais páginas podem ser excluídas por não estarem sendo utilizadas?',
+  's_reuse': '2 · Elementos reutilizáveis que podem ser excluídos',
+  'q_reuse': 'Quais elementos reutilizáveis podem ser excluídos por não serem utilizados?',
+  's_back': '3 · Backend workflows não usados e não expostos como API',
+  'q_back': 'Quais backend workflows não são utilizados e não estão expostos como endpoint API?',
+  's_opt': '4 · Option Sets sem uso', 'q_opt': 'Quais Option Sets não são utilizados em nenhuma parte do sistema?',
+  's_plug': '5 · Plugins instalados sem uso', 'q_plug': 'Quais plugins instalados não estão sendo usados em nenhuma parte do sistema?',
+  's_sty': '6 · Estilos não usados', 'q_sty': 'Quais estilos não estão sendo usados em nenhum elemento?',
+  's_var': '6b · Variáveis de cor e fonte sem uso',
+  'var_body': 'Variáveis (design tokens) definidas pelo usuário que não são referenciadas por nenhum elemento nem estilo (nenhum <code>var(--color_&lt;id&gt;)</code> / <code>var(--font_&lt;id&gt;)</code>). Ids de token colidem com ids de elemento e o tema é duplicado no export, então a contagem crua do id é enganosa — por isso usamos a forma <code>var()</code>.',
+  'th_var': 'Variável', 'th_rgba': 'Cor (rgba)', 'th_family': 'Fonte (família)',
+  'var_colors_h': 'Cores', 'var_fonts_h': 'Fontes',
+  'var_none_c': 'Todas as variáveis de cor estão em uso.', 'var_none_f': 'Todas as variáveis de fonte estão em uso.',
+  'var_stat': '%d ativas, %d deletadas',
+  'confirmed': 'Confirmado morto', 'candidate': 'Candidato a excluir',
+  'inuse': 'Em uso (acesso direto/embed)', 'nostatus': 'Sem status na planilha',
+  'th_page': 'Página', 'th_class': 'Classificação', 'th_id': 'ID interno', 'th_reuse': 'Elemento reutilizável',
+  'th_wf': 'Workflow (wf_name)', 'th_folder': 'Pasta', 'th_sit': 'Situação',
+  'th_os': 'Nome (chave)', 'th_osd': 'Rótulo', 'th_sty': 'Estilo', 'th_styt': 'Tipo', 'th_styid': 'ID',
+  'th_plug': 'Plugin', 'th_ver': 'Versão', 'th_obs': 'Observação',
+  'nav_never': 'nunca disparado', 'nav_trans': 'só chamado por WF morto', 'legacy': 'nome-legado',
+  'filter_page': 'filtrar por nome da página…', 'filter_wf': 'filtrar por nome do workflow…',
+  'all': 'Todas', 'noname': '(nome só visível no editor)',
+  'reuse_body': 'nunca são inseridos em nenhuma página, view mobile ou outro reutilizável (nenhum <code>CustomElement.custom_id</code> aponta para eles). Confiança alta.',
+  'th_twin': 'Gêmeo em uso (ID)', 'twin_in_use': 'em uso',
+  'dup_reuse_t': '2b · Nome duplicado — VERIFICAR antes de excluir',
+  'dup_reuse_b': '<strong>Não exclua às cegas.</strong> Estes reutilizáveis não são inseridos em lugar nenhum, MAS existe outro reutilizável com o <strong>nome idêntico</strong> que está em uso (coluna “Gêmeo em uso”). A busca do Bubble é por NOME, então ela mostra os usos do gêmeo sob este elemento — fazendo-o parecer usado. Confirme pelo <strong>ID</strong> qual você vai excluir; provavelmente este aqui é uma cópia órfã, mas verifique.',
+  'back_body': 'API workflows (tipo <code>APIEvent</code>). Um <code>APIEvent</code> não exposto só roda se for agendado internamente (<code>Schedule API workflow</code>). Os “diretos” não estão expostos e o ID não aparece em nenhum agendamento — não há como executá-los hoje.',
+  'exposed': 'expostos como endpoint público', 'direct': 'Inalcançáveis (diretos)', 'trans': 'Mortos transitivos',
+  'opt_body': 'A expressão canônica <code>option.&lt;nome&gt;</code> não aparece em nenhum elemento, campo, workflow ou condição.',
+  'plug_used': 'têm elementos, ações ou chamadas de API em uso.',
+  'plug_used_t': '5c · Plugins em uso (referência)',
+  'plug_used_b': 'Plugins com elementos, ações ou chamadas em uso — mantidos. Listados aqui só para referência: nome + link do marketplace.',
+  'plug_open': 'abrir no marketplace', 'plug_delisted': 'página indisponível — provavelmente removido',
+  'plug_orphan_t': '5a · Órfãos — candidatos à remoção (revisar)',
+  'plug_orphan_b': 'Instalados mas sem nenhum elemento, ação, chamada de API ou configuração no export. <strong>Atenção:</strong> alguns plugins agem <strong>globalmente só por estarem instalados</strong> (CSS por ID de elemento como o <em>Classify</em>, SEO, headers, analytics) e não deixam rastro no export — se reconhecer um plugin global nesta lista, verifique antes de remover.',
+  'plug_cfg_t': '5b · Sem elemento visível, mas ativos de outra forma — verificar',
+  'plug_cfg_b': 'Sem elemento na tela, mas ativos: com chaves de API/headers/credenciais (login, DocuSign, Mailchimp), ou <strong>globais só por estarem instalados</strong> (ex.: <em>Classify</em> aplica CSS por ID). Podem rodar no servidor ou no projeto todo — não remover sem confirmar.',
+  'plug_global': 'global', 'plug_paid': '💲 pago',
+  'c_plug_paid': 'Plugins pagos sem uso',
+  'plug_paid_alert': 'plugins PAGOS instalados mas sem uso — custo recorrente/desperdiçado. Priorize a revisão. (Preço pesquisado no marketplace; confirme antes de cancelar a assinatura/licença.)',
+  'sty_body': 'Nenhum elemento tem <code>"style":"&lt;id&gt;"</code> apontando para eles e não são estilo padrão de nenhum tipo.',
+  'caveat_pages': 'Atenção — falsos positivos esperados. Páginas Bubble têm URL pública; muitas “sem navegação interna” são portais de acesso direto ou embed. Há {L} ações <code>ListGoToPage</code> e {D} navegações dinâmicas cujo destino não é resolvível estaticamente. Não exclua nada só por aparecer aqui.',
+  'refurl_t': 'Referenciadas por URL/nome (invisível ao scan de navegação) — MANTER',
+  'refurl_b': 'Estas páginas não têm navegação interna por ID, mas o NOME (slug) aparece como URL real do app em um link, Run JavaScript, HTML embed ou script — tipicamente callbacks OAuth e links em e-mails/mensagens. <strong>Não são candidatas a exclusão</strong> e já foram removidas da lista acima.',
+  'th_ev': 'Evidência (onde o nome aparece)', 'th_hits': 'URLs',
+  'th_del': 'Excluído?', 'trk_hint': 'marcados como já excluídos no Bubble',
+  'trk_export_md': '⬇ Exportar .md', 'trk_export_md_t': 'Baixa um checklist .md (versionável, reimportável, aceito por --state)',
+  'trk_export_json': '⬇ .json', 'trk_import': '⬆ Importar', 'trk_clear': 'Limpar',
+  'md_hint': 'As chaves entre crases sao de maquina — edite os checkboxes, nao as chaves. Reimporte este arquivo ou passe-o em bubble_audit.py --state.',
+  'clear_confirm': 'Limpar todas as marcacoes de exclusao?',
+  'nv_p': 'Páginas', 'nv_r': 'Reutilizáveis', 'nv_b': 'Backend WF', 'nv_o': 'Option Sets',
+  'nv_ap': 'APIs',
+  's_api': '9 · API Connector — endpoints declarados sem uso',
+  'q_api': 'Quais chamadas de API declaradas no API Connector nunca são usadas (nem como data source nem como action)?',
+  'api_body': 'Chamadas declaradas no API Connector cujo tipo <code>apiconnector2-&lt;api&gt;.&lt;call&gt;</code> não aparece em nenhum data source ou ação de workflow. Chamadas de OAuth/<em>token</em> (disparadas automaticamente pela autenticação) são tratadas como usadas. Resíduo a verificar: chamadas montadas dinamicamente.',
+  'c_api': 'Endpoints de API sem uso',
+  'th_provider': 'API (provider)', 'th_endpoint': 'Endpoint (call)', 'th_method': 'Método',
+  'api_none': 'Todas as chamadas de API declaradas são usadas.', 'filter_api': 'filtrar por API / endpoint…',
+  'nv_g': 'Removidos', 'c_ghost': 'Refs a plugins removidos',
+  's_ghost': '10 · Plugins removidos ainda referenciados (referências quebradas)',
+  'q_ghost': 'Quais plugins foram removidos do projeto mas ainda têm elementos/ações que os referenciam?',
+  'ghost_body': 'Estes elementos/ações usam o tipo <code>&lt;pluginId&gt;-…</code> de um plugin que <strong>não está mais na lista de plugins instalados</strong> — o plugin foi desinstalado mas as referências ficaram, então provavelmente estão <strong>quebradas</strong>. Corrija: reinstale o plugin OU remova o elemento/ação. (Nome do plugin resolvido no marketplace.)',
+  'ghost_none': 'Nenhuma referência a plugin removido.',
+  'th_where': 'Onde', 'th_loc': 'Elemento / Workflow', 'filter_ghost': 'filtrar por plugin / página / elemento…',
+  'gw_element': 'elemento', 'gw_action': 'ação de WF', 'gw_trigger': 'gatilho de WF',
+  'nv_pl': 'Plugins', 'nv_s': 'Estilos', 'nv_d': 'Dados', 'nv_m': 'Metodologia',
+  'c_dtF': 'Campos sem uso', 'c_dtT': 'Tabelas sem uso',
+  's_dt': '7 · Campos e tabelas (dados) sem uso',
+  'q_dt': 'Quais campos e tabelas nunca são usados, e o que está exposto na Data API?',
+  'dt_tables_t': '7a · Tabelas (tipos de dados) sem nenhuma referência',
+  'dt_tables_b': 'Tipo não referenciado como <code>custom.&lt;tipo&gt;</code> em lugar nenhum, sem nenhum campo usado, não exposto na Data API e não citado em script. Excluir um tipo apaga os dados dele — confirme que não há dados a preservar.',
+  'dt_fields_t': '7b · Campos sem uso',
+  'dt_fields_b': 'Campos cuja chave não aparece em nenhuma expressão, elemento, workflow, search ou script (JS/HTML). Já descontados os campos e tabelas na lixeira.',
+  'dt_none_tables': 'Nenhuma tabela totalmente órfã — todas são referenciadas, têm campo usado ou estão expostas.',
+  'th_table': 'Tabela', 'th_field': 'Campo', 'th_key': 'Chave (interna)', 'th_ftype': 'Tipo', 'th_api': 'Data API?',
+  'st_unused': 'sem uso', 'st_api': 'exposto na Data API', 'api_yes': 'exposto', 'api_no': '—',
+  'dt_exposed_note': 'campos sem uso interno mas cuja tabela está exposta na Data API — podem ter consumidores externos; verifique antes de excluir.',
+  'dt_deleted_note': 'campos já deletados (lixeira) e', 'dt_tables_deleted': 'tabelas já deletadas;',
+  'dt_exposed_tables': 'tabelas expostas na Data API.',
+  'nv_w': 'Auditoria WF',
+  's_wf': '8 · Auditoria de workflows (páginas & reusáveis)',
+  'q_wf': 'Quais Custom Events nunca são chamados e quais workflows têm gatilho que nunca dispara?',
+  'wf_bce_t': 'Custom Events do Backend nunca chamados',
+  'wf_bce_b': 'Custom Events no backend cujo id não é alvo de nenhum Trigger/Schedule custom event em lugar nenhum.',
+  'wf_ce_t': '8a · Custom Events (páginas/reusáveis) nunca chamados',
+  'wf_ce_b': 'Custom Events definidos em páginas ou reusáveis que nenhum Trigger/Schedule custom event dispara. Confiança alta.',
+  'wf_orphan_t': '8b · Workflows com gatilho em elemento inexistente (deletado)',
+  'wf_orphan_b': 'O evento está ligado a um <code>element_id</code> que não existe mais — o elemento foi deletado, então o workflow nunca dispara. Confiança alta.',
+  'wf_hidden_t': '8c · Workflows com gatilho em elemento que nunca é renderizado',
+  'wf_hidden_b': 'Agora <strong>com as condicionais consideradas</strong> (aba <em>Conditional</em> = <code>states</code>). O gatilho está ligado a um elemento que <strong>nunca aparece na tela</strong>: nem ele nem nenhum grupo-pai pode ficar visível — <code>is_visible</code> padrão = não, nenhuma ação Show/Toggle/Animate e nenhuma condicional que o exiba. A coluna <em>Motivo</em> mostra se é o próprio elemento ou um grupo-pai oculto. Resíduo a verificar: condicionais cujo resultado nunca é verdadeiro, visibilidade via plugin/JS, ou regras de responsividade.',
+  'th_trigger': 'Gatilho', 'th_container': 'Página/Reusável', 'th_event': 'Custom Event', 'th_elem': 'Elemento',
+  'th_reason': 'Motivo', 'wf_h_self': 'elemento nunca exibido', 'wf_h_anc': 'grupo-pai oculto:',
+  'wf_none': 'Nenhum.', 'wf_kp': 'página', 'wf_kr': 'reusável',
+  'c_wf': 'Custom Events sem uso', 'c_wf_orphan': 'WF em elemento inexistente',
+  'method': 'Metodologia & limites', 'already_deleted': 'já deletados',
+ },
+ 'en': {
+  'title': 'Unused-elements report', 'sub_src': 'Static analysis of a Bubble export',
+  'generated': 'generated', 'how_title': 'How to read this report',
+  'how_body': 'Each item has a confidence level. In Bubble, “unreferenced” does not always mean “safe to delete”: pages have their own public URL (openable via direct link, email or iframe/embed) and plugins can run server-side with no visible element. Backend workflows, option sets, reusables and styles have deterministic signals and high confidence.',
+  'c_pages': 'Pages with no internal navigation', 'c_reuse': 'Unused reusables',
+  'c_back': 'Unreachable backend workflows', 'c_opt': 'Unused Option Sets',
+  'c_plug': 'Orphaned plugins', 'c_sty': 'Unused styles', 'of': 'of',
+  's_pages': '1 · Pages that can be deleted',
+  'q_pages': 'Which pages can be deleted because they are not used?',
+  's_reuse': '2 · Reusable elements that can be deleted',
+  'q_reuse': 'Which reusable elements can be deleted because they are not used?',
+  's_back': '3 · Backend workflows unused and not exposed as an API',
+  'q_back': 'Which backend workflows are unused and not exposed as an API endpoint?',
+  's_opt': '4 · Unused Option Sets', 'q_opt': 'Which Option Sets are not used anywhere?',
+  's_plug': '5 · Installed but unused plugins', 'q_plug': 'Which installed plugins are not used anywhere?',
+  's_sty': '6 · Unused styles', 'q_sty': 'Which styles are not used by any element?',
+  's_var': '6b · Unused color & font variables',
+  'var_body': 'User-defined variables (design tokens) referenced by no element or style (no <code>var(--color_&lt;id&gt;)</code> / <code>var(--font_&lt;id&gt;)</code>). Token ids collide with element ids and the theme is snapshotted many times in the export, so a bare-id count is misleading — we use the <code>var()</code> form instead.',
+  'th_var': 'Variable', 'th_rgba': 'Color (rgba)', 'th_family': 'Font (family)',
+  'var_colors_h': 'Colors', 'var_fonts_h': 'Fonts',
+  'var_none_c': 'All color variables are in use.', 'var_none_f': 'All font variables are in use.',
+  'var_stat': '%d active, %d deleted',
+  'confirmed': 'Confirmed dead', 'candidate': 'Deletion candidate',
+  'inuse': 'In use (direct/embed)', 'nostatus': 'No sheet status',
+  'th_page': 'Page', 'th_class': 'Classification', 'th_id': 'Internal ID', 'th_reuse': 'Reusable element',
+  'th_wf': 'Workflow (wf_name)', 'th_folder': 'Folder', 'th_sit': 'Status',
+  'th_os': 'Name (key)', 'th_osd': 'Label', 'th_sty': 'Style', 'th_styt': 'Type', 'th_styid': 'ID',
+  'th_plug': 'Plugin', 'th_ver': 'Version', 'th_obs': 'Note',
+  'nav_never': 'never triggered', 'nav_trans': 'only called by dead WF', 'legacy': 'legacy-name',
+  'filter_page': 'filter by page name…', 'filter_wf': 'filter by workflow name…',
+  'all': 'All', 'noname': '(name only visible in editor)',
+  'reuse_body': 'are never placed on any page, mobile view or other reusable (no <code>CustomElement.custom_id</code> points to them). High confidence.',
+  'th_twin': 'Used twin (ID)', 'twin_in_use': 'in use',
+  'dup_reuse_t': '2b · Duplicate name — VERIFY before deleting',
+  'dup_reuse_b': '<strong>Do not delete blindly.</strong> These reusables are placed nowhere, BUT another reusable with the <strong>exact same name</strong> IS in use (see “Used twin”). Bubble\'s search matches by NAME, so it shows the twin\'s usages under this element — making it look used. Confirm by <strong>ID</strong> which one you delete; this one is likely an orphaned copy, but verify.',
+  'back_body': 'API workflows (type <code>APIEvent</code>). A non-exposed <code>APIEvent</code> can only run if scheduled internally (<code>Schedule API workflow</code>). The “direct” ones are not exposed and their id appears in no scheduling action — they cannot run today.',
+  'exposed': 'exposed as a public endpoint', 'direct': 'Unreachable (direct)', 'trans': 'Transitively dead',
+  'opt_body': 'The canonical expression <code>option.&lt;name&gt;</code> appears in no element, field, workflow or condition.',
+  'plug_used': 'have elements, actions or API calls in use.',
+  'plug_used_t': '5c · Plugins in use (reference)',
+  'plug_used_b': 'Plugins with elements, actions or calls in use — kept. Listed here for reference only: name + marketplace link.',
+  'plug_open': 'open in marketplace', 'plug_delisted': 'page unavailable — likely delisted',
+  'plug_orphan_t': '5a · Orphaned — removal candidates (review)',
+  'plug_orphan_b': 'Installed but with no element, action, API call or configuration in the export. <strong>Heads up:</strong> some plugins act <strong>globally just by being installed</strong> (CSS-by-element-id like <em>Classify</em>, SEO, headers, analytics) and leave no trace in the export — if you recognize a global plugin here, verify before removing.',
+  'plug_cfg_t': '5b · No visible element, but active another way — verify',
+  'plug_cfg_b': 'No on-screen element, but active: API keys/headers/credentials (login, DocuSign, Mailchimp), or <strong>global just by being installed</strong> (e.g. <em>Classify</em> applies CSS by element id). May run server-side or project-wide — do not remove without confirming.',
+  'plug_global': 'global', 'plug_paid': '💲 paid',
+  'c_plug_paid': 'Unused paid plugins',
+  'plug_paid_alert': 'PAID plugins installed but unused — recurring/wasted cost. Prioritize review. (Price researched from the marketplace; confirm before cancelling the subscription/licence.)',
+  'sty_body': 'No element has <code>"style":"&lt;id&gt;"</code> pointing to them and they are not the default style of any type.',
+  'caveat_pages': 'Heads up — expected false positives. Bubble pages have a public URL; many with “no internal navigation” are direct-access or embed portals. There are {L} <code>ListGoToPage</code> actions and {D} dynamic navigations whose target is not statically resolvable. Do not delete anything just because it appears here.',
+  'refurl_t': 'Referenced by URL/name (invisible to the nav scan) — KEEP',
+  'refurl_b': 'These pages have no internal id-navigation, but their NAME (slug) appears as a real app URL in a link, Run JavaScript, HTML embed or script — typically OAuth callbacks and links in emails/messages. <strong>They are not deletion candidates</strong> and were removed from the list above.',
+  'th_ev': 'Evidence (where the name appears)', 'th_hits': 'URLs',
+  'th_del': 'Deleted?', 'trk_hint': 'marked as already deleted in Bubble',
+  'trk_export_md': '⬇ Export .md', 'trk_export_md_t': 'Downloads a .md checklist (git-friendly, re-importable, accepted by --state)',
+  'trk_export_json': '⬇ .json', 'trk_import': '⬆ Import', 'trk_clear': 'Clear',
+  'md_hint': 'Backticked keys are machine-readable — edit the checkboxes, not the keys. Re-import this file or pass it to bubble_audit.py --state.',
+  'clear_confirm': 'Clear all deletion marks?',
+  'nv_p': 'Pages', 'nv_r': 'Reusables', 'nv_b': 'Backend WF', 'nv_o': 'Option Sets',
+  'nv_ap': 'APIs',
+  's_api': '9 · API Connector — declared endpoints never used',
+  'q_api': 'Which API Connector calls are declared but never used (as a data source or an action)?',
+  'api_body': 'Calls declared in the API Connector whose type <code>apiconnector2-&lt;api&gt;.&lt;call&gt;</code> appears in no data source or workflow action. OAuth/<em>token</em> calls (fired automatically by authentication) are treated as used. Residual to verify: calls assembled dynamically.',
+  'c_api': 'Unused API endpoints',
+  'th_provider': 'API (provider)', 'th_endpoint': 'Endpoint (call)', 'th_method': 'Method',
+  'api_none': 'All declared API calls are used.', 'filter_api': 'filter by API / endpoint…',
+  'nv_g': 'Removed', 'c_ghost': 'Refs to removed plugins',
+  's_ghost': '10 · Removed plugins still referenced (broken references)',
+  'q_ghost': 'Which plugins were removed from the project but still have elements/actions referencing them?',
+  'ghost_body': 'These elements/actions use the type <code>&lt;pluginId&gt;-…</code> of a plugin that is <strong>no longer in the installed-plugins list</strong> — the plugin was uninstalled but the references remained, so they are probably <strong>broken</strong>. Fix: reinstall the plugin OR remove the element/action. (Plugin name resolved from the marketplace.)',
+  'ghost_none': 'No references to removed plugins.',
+  'th_where': 'Where', 'th_loc': 'Element / Workflow', 'filter_ghost': 'filter by plugin / page / element…',
+  'gw_element': 'element', 'gw_action': 'WF action', 'gw_trigger': 'WF trigger',
+  'nv_pl': 'Plugins', 'nv_s': 'Styles', 'nv_d': 'Data', 'nv_m': 'Methodology',
+  'c_dtF': 'Unused fields', 'c_dtT': 'Unused tables',
+  's_dt': '7 · Unused data fields and tables',
+  'q_dt': 'Which fields and tables are never used, and what is exposed in the Data API?',
+  'dt_tables_t': '7a · Tables (data types) with no reference at all',
+  'dt_tables_b': 'Type not referenced as <code>custom.&lt;type&gt;</code> anywhere, with no field used, not exposed in the Data API and not named in any script. Deleting a type deletes its data — confirm there is nothing to keep.',
+  'dt_fields_t': '7b · Unused fields',
+  'dt_fields_b': 'Fields whose key appears in no expression, element, workflow, search or script (JS/HTML). Already-trashed fields and tables are excluded.',
+  'dt_none_tables': 'No fully orphaned table — all are referenced, have a used field, or are exposed.',
+  'th_table': 'Table', 'th_field': 'Field', 'th_key': 'Key (internal)', 'th_ftype': 'Type', 'th_api': 'Data API?',
+  'st_unused': 'unused', 'st_api': 'exposed in Data API', 'api_yes': 'exposed', 'api_no': '—',
+  'dt_exposed_note': 'fields with no internal use but whose table is exposed in the Data API — they may have external consumers; verify before deleting.',
+  'dt_deleted_note': 'fields already deleted (trash) and', 'dt_tables_deleted': 'tables already deleted;',
+  'dt_exposed_tables': 'tables exposed in the Data API.',
+  'nv_w': 'WF audit',
+  's_wf': '8 · Workflow audit (pages & reusables)',
+  'q_wf': 'Which Custom Events are never called, and which workflows have a trigger that can never fire?',
+  'wf_bce_t': 'Backend Custom Events never called',
+  'wf_bce_b': 'Backend Custom Events whose id is the target of no Trigger/Schedule custom-event action anywhere.',
+  'wf_ce_t': '8a · Custom Events (pages/reusables) never called',
+  'wf_ce_b': 'Custom Events defined on pages or reusables that no Trigger/Schedule custom-event action fires. High confidence.',
+  'wf_orphan_t': '8b · Workflows triggered by a missing (deleted) element',
+  'wf_orphan_b': 'The event is bound to an <code>element_id</code> that no longer exists — the element was deleted, so the workflow can never fire. High confidence.',
+  'wf_hidden_t': '8c · Workflows triggered by an element that is never rendered',
+  'wf_hidden_b': 'Now <strong>with conditionals accounted for</strong> (the <em>Conditional</em> tab = <code>states</code>). The trigger is bound to an element that <strong>never appears on screen</strong>: neither it nor any parent group can become visible — default <code>is_visible</code> = no, no Show/Toggle/Animate action, and no conditional reveals it. The <em>Reason</em> column shows whether it is the element itself or a hidden parent group. Residual to verify: conditionals that never evaluate true, plugin/JS-driven visibility, or responsive rules.',
+  'th_trigger': 'Trigger', 'th_container': 'Page/Reusable', 'th_event': 'Custom Event', 'th_elem': 'Element',
+  'th_reason': 'Reason', 'wf_h_self': 'element never shown', 'wf_h_anc': 'hidden parent group:',
+  'wf_none': 'None.', 'wf_kp': 'page', 'wf_kr': 'reusable',
+  'c_wf': 'Unused Custom Events', 'c_wf_orphan': 'WF on missing element',
+  'method': 'Methodology & limits', 'already_deleted': 'already deleted',
+ },
+}
+
+def esc(s):
+    return html.escape(str(s if s is not None else ''))
+
+def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend, exposed,
+                opt, sty, plug_orphan, plug_cfg, plug_used, plug_total, dt,
+                plug_used_list=None, variables=None, wfaudit=None, apicalls=None, ghosts=None, initial_deleted=None):
+    T = STR[lang]
+    initial_deleted = sorted(initial_deleted or [])
+    EXPORT_TITLES = {'page': 'Pages', 'reusable': 'Reusable elements', 'workflow': 'Backend workflows',
+                     'optionset': 'Option Sets', 'plugin': 'Plugins', 'style': 'Styles',
+                     'colorvar': 'Color variables', 'fontvar': 'Font variables',
+                     'customevent': 'Custom events (uncalled)', 'pagewf': 'Workflows on missing element',
+                     'hiddenwf': 'Workflows on never-rendered element', 'apicall': 'API Connector calls (unused)',
+                     'ghostref': 'Removed-plugin references', 'datatype': 'Data tables', 'field': 'Data fields'}
+    unused_pages = [p for p in pages if p['unused']]
+    ref_url_pages = sorted([p for p in pages if p.get('referenced_by_url')], key=lambda x: -x['name_url_hits'])
+    # attach sheet verdicts
+    for p in unused_pages:
+        a = page_audit.get(p['name'])
+        p['verdict'] = (a['verdict'] if a and a['verdict'] else ('nostatus'))
+        p['status_text'] = a['status_text'] if a else ''
+    order = {'confirmed-dead': 1, 'candidate': 2, 'nostatus': 3, 'in-use': 4}
+    unused_pages.sort(key=lambda p: (order.get(p['verdict'], 3), p['name'] or ''))
+    n_conf = sum(1 for p in unused_pages if p['verdict'] == 'confirmed-dead')
+    n_cand = sum(1 for p in unused_pages if p['verdict'] == 'candidate')
+    n_inuse = sum(1 for p in unused_pages if p['verdict'] == 'in-use')
+    VB = {'confirmed-dead': ('v-red', T['confirmed']), 'candidate': ('v-orange', T['candidate']),
+          'in-use': ('v-green', T['inuse']), 'nostatus': ('v-gray', T['nostatus'])}
+    # a checkbox <td> keyed by a stable "<category>:<id>" so marks survive report regeneration
+    def chk(key, label):
+        return (f"<td class='cellchk'><input type='checkbox' class='delchk' "
+                f'data-key="{esc(key)}" data-label="{esc(label)}"></td>')
+    del_h = f"<th class='cellchk'>{T['th_del']}</th>"
+
+    def prow(p):
+        cls, lbl = VB.get(p['verdict'], ('v-gray', T['nostatus']))
+        tag = f" <span class='tag'>{T['legacy']}</span>" if p['name_flag_old'] else ''
+        st = f"<td>{esc(p['status_text'])}</td>" if page_audit else ''
+        return (f"<tr data-v='{p['verdict']}'><td class='mono'>{esc(p['name'])}{tag}</td>"
+                f"<td><span class='vbadge {cls}'>{esc(lbl)}</span></td>{st}"
+                f"<td class='mono dim'>{esc(p['inner_id'])}</td>{chk('page:'+str(p['inner_id']), p['name'])}</tr>")
+    sheet_hdr = f"<th>{T['th_sit']}</th>" if page_audit else ''
+    # sort key that ignores leading emoji/symbols (❌ ♻️ 🧩 …) so names sort by their first letter
+    def _nk(s):
+        return re.sub(r'^[^\w]+', '', (s or '')).lower()
+    reuse_hard = sorted([r for r in reuse if r['unused_hard']], key=lambda r: _nk(r['name']))
+    reuse_trans = sorted([r for r in reuse if r['unused_transitive']], key=lambda r: _nk(r['name']))
+    reuse_dup = sorted([r for r in reuse if r.get('dup_name_conflict')], key=lambda r: _nk(r['name']))
+    back_hard = sorted([r for r in backend if r['unused_hard']], key=lambda x: (x['folder'], x['wf_name'] or ''))
+    back_trans = sorted([r for r in backend if r['unused_transitive']], key=lambda x: (x['folder'], x['wf_name'] or ''))
+    opt_unused = [o for o in opt if o['unused']]
+    opt_deleted = sum(1 for o in opt if o['deleted'])
+    # styles ordered by Type then Style name (as requested)
+    sty_unused = sorted([s for s in sty if s['unused']],
+                        key=lambda s: ((s['stype'] or '').lower(), (s['display'] or '').lower()))
+
+    def simple(rows, headers, cells, keyfn=None):
+        h = ''.join(f'<th>{esc(x)}</th>' for x in headers) + (del_h if keyfn else '')
+        b = ''
+        for r in rows:
+            cells_html = ''.join(f'<td>{c}</td>' for c in cells(r))
+            if keyfn:
+                k, lab = keyfn(r)
+                cells_html += chk(k, lab)
+            b += '<tr>' + cells_html + '</tr>'
+        return f"<table><thead><tr>{h}</tr></thead><tbody>{b}</tbody></table>"
+
+    reuse_tbl = simple(reuse_hard, [T['th_reuse'], T['th_id']],
+                       lambda r: [f"<span class='mono'>{esc(r['name'])}</span>", f"<span class='mono dim'>{esc(r['inner_id'])}</span>"],
+                       keyfn=lambda r: ('reusable:' + str(r['inner_id']), r['name']))
+    reuse_tbl_t = simple(reuse_trans, [T['th_reuse'], T['th_id']],
+                         lambda r: [f"<span class='mono'>{esc(r['name'])}</span>", f"<span class='mono dim'>{esc(r['inner_id'])}</span>"],
+                         keyfn=lambda r: ('reusable:' + str(r['inner_id']), r['name'])) if reuse_trans else ''
+    reuse_tbl_dup = simple(reuse_dup, [T['th_reuse'], T['th_id'], T['th_twin']],
+                           lambda r: [f"<span class='mono'>{esc(r['name'])}</span>", f"<span class='mono dim'>{esc(r['inner_id'])}</span>",
+                                      f"<span class='mono'>{esc(r['twin_used_id'])}</span> <span class='vbadge v-green'>{T['twin_in_use']}</span>"],
+                           keyfn=lambda r: ('reusable:' + str(r['inner_id']), r['name'])) if reuse_dup else ''
+    back_rows = ''.join(
+        f"<tr data-k='hard'><td class='mono'>{esc(r['wf_name'])}</td><td>{esc(r['folder'])}</td>"
+        f"<td><span class='vbadge v-red'>{T['nav_never']}</span></td><td class='mono dim'>{esc(r['inner_id'])}</td>"
+        f"{chk('workflow:'+str(r['inner_id']), r['wf_name'])}</tr>"
+        for r in back_hard) + ''.join(
+        f"<tr data-k='trans'><td class='mono'>{esc(r['wf_name'])}</td><td>{esc(r['folder'])}</td>"
+        f"<td><span class='vbadge v-orange'>{T['nav_trans']}</span></td><td class='mono dim'>{esc(r['inner_id'])}</td>"
+        f"{chk('workflow:'+str(r['inner_id']), r['wf_name'])}</tr>"
+        for r in back_trans)
+    opt_tbl = simple(opt_unused, [T['th_os'], T['th_osd']],
+                     lambda r: [f"<span class='mono'>{esc(r['name'])}</span>", esc(r['display'])],
+                     keyfn=lambda r: ('optionset:' + str(r['name']), r['name']))
+    sty_tbl = simple(sty_unused, [T['th_styt'], T['th_sty'], T['th_styid']],
+                     lambda r: [f"<span class='tag'>{esc(r['stype'])}</span>", esc(r['display']), f"<span class='mono dim'>{esc(r['id'])}</span>"],
+                     keyfn=lambda r: ('style:' + str(r['id']), r['display'] or r['id']))
+    # unused color / font variables (design tokens)
+    vcolors = (variables or {}).get('colors', {'unused': [], 'active': 0, 'deleted': 0})
+    vfonts = (variables or {}).get('fonts', {'unused': [], 'active': 0, 'deleted': 0})
+    _colorlike = re.compile(r'^(#[0-9a-fA-F]{3,8}|rgba?\([\d.,%\s]+\))$')
+    def var_tbl(rows, kind, extra_label):
+        body = ''
+        for r in rows:
+            if kind == 'color':
+                val = str(r.get('extra') or '')
+                sw = f"<span class='swatch' style='background:{esc(val)}'></span> " if _colorlike.match(val) else ''
+                extra = sw + f"<span class='mono dim'>{esc(val)}</span>"
+            else:
+                extra = esc(r.get('extra'))
+            key = ('colorvar:' if kind == 'color' else 'fontvar:') + str(r['id'])
+            body += (f"<tr><td>{esc(r['name'])}</td><td>{extra}</td><td class='mono dim'>{esc(r['id'])}</td>"
+                     f"{chk(key, r['name'])}</tr>")
+        return f"<table><thead><tr><th>{T['th_var']}</th><th>{extra_label}</th><th>{T['th_styid']}</th>{del_h}</tr></thead><tbody>{body}</tbody></table>"
+    colorvar_tbl = var_tbl(vcolors['unused'], 'color', T['th_rgba']) if vcolors['unused'] else f"<div class='note note-green'>{T['var_none_c']}</div>"
+    fontvar_tbl = var_tbl(vfonts['unused'], 'font', T['th_family']) if vfonts['unused'] else f"<div class='note note-green'>{T['var_none_f']}</div>"
+    def plug_name_cell(r):
+        if r.get('url'):
+            label = esc(r['name']) if r['name'] else T['plug_open']
+            tag = f" <span class='tag'>{T['plug_delisted']}</span>" if r.get('delisted') else ''
+            return f"<a href='{esc(r['url'])}' target='_blank' rel='noopener'>{label} ↗</a>{tag}"
+        return esc(r['name']) if r['name'] else f"<span class='dim'>{T['noname']}</span>"
+    global_badge = " <span class='vbadge v-green'>" + T['plug_global'] + "</span>"
+    def paid_badge(r):
+        if not r.get('paid'):
+            return ''
+        px = ' · ' + esc(r['price']) if r.get('price') else ''
+        return " <span class='vbadge v-red'>" + T['plug_paid'] + px + "</span>"
+    unused_paid = [p for p in (plug_orphan + plug_cfg) if p.get('paid')]
+    def plug_tbl(rows):
+        b = ''.join(f"<tr><td>{plug_name_cell(r)}{global_badge if r.get('headless') else ''}{paid_badge(r)}</td>"
+                    f"<td class='mono dim'>{esc(r['id'])}</td><td class='mono'>{esc(r['version'])}</td>"
+                    f"<td class='dim'>{esc(r['reason'])}</td>{chk('plugin:'+str(r['id']), r['name'] or r['id'])}</tr>" for r in rows)
+        return f"<table><thead><tr><th>{T['th_plug']}</th><th>ID</th><th>{T['th_ver']}</th><th>{T['th_obs']}</th>{del_h}</tr></thead><tbody>{b}</tbody></table>"
+    # in-use plugins: reference list only (kept), name + marketplace link, no checkbox
+    plug_used_rows = plug_used_list or []
+    plug_used_tbl = (f"<div class='scroll'><table><thead><tr><th>{T['th_plug']}</th><th>ID</th><th>{T['th_ver']}</th></tr></thead><tbody>"
+                     + ''.join(f"<tr><td>{plug_name_cell(r)}</td><td class='mono dim'>{esc(r['id'])}</td>"
+                               f"<td class='mono'>{esc(r['version'])}</td></tr>" for r in plug_used_rows)
+                     + "</tbody></table></div>")
+
+    # ---- data types & fields (section 7) ----
+    dtT, dtF = dt['types'], dt['fields']
+    def dt_type_row(r):
+        api = f"<span class='vbadge v-green'>{T['api_yes']}</span>" if r['exposed'] else f"<span class='dim'>{T['api_no']}</span>"
+        return (f"<tr><td class='mono'>{esc(r['display'])}</td><td class='dim'>{r['active_fields']}</td>"
+                f"<td>{api}</td><td class='mono dim'>{esc(r['type_key'])}</td>"
+                f"{chk('datatype:' + str(r['type_key']), r['display'])}</tr>")
+    dt_tables_tbl = (f"<table><thead><tr><th>{T['th_table']}</th><th>{T['th_field']}s</th><th>{T['th_api']}</th><th>{T['th_key']}</th>{del_h}</tr></thead>"
+                     f"<tbody>{''.join(dt_type_row(r) for r in dtT['unused'])}</tbody></table>") if dtT['unused'] \
+                    else f"<div class='note note-green'>{T['dt_none_tables']}</div>"
+    def clean_ftype(v):
+        return str(v or '').replace('custom.', '→ ').replace('option.', 'option:')
+    def dt_field_row(r, status):
+        cls, lbl = ('v-orange', T['st_unused']) if status == 'unused' else ('v-green', T['st_api'])
+        api = f"<span class='vbadge v-green'>{T['api_yes']}</span>" if r['exposed'] else f"<span class='dim'>{T['api_no']}</span>"
+        return (f"<tr data-f='{status}'><td class='mono'>{esc(r['type_display'])}</td>"
+                f"<td>{esc(r['display'])} <span class='vbadge {cls}'>{esc(lbl)}</span></td>"
+                f"<td class='mono dim'>{esc(r['field_key'])}</td><td class='mono dim'>{esc(clean_ftype(r['ftype']))}</td>"
+                f"<td>{api}</td>{chk('field:' + r['type_key'] + '.' + r['field_key'], (r['type_display'] or '') + ' > ' + (r['display'] or r['field_key']))}</tr>")
+    dt_field_rows = ''.join(dt_field_row(r, 'unused') for r in dtF['candidates']) + ''.join(dt_field_row(r, 'api') for r in dtF['exposed'])
+    n_fcand, n_fexp = len(dtF['candidates']), len(dtF['exposed'])
+
+    # ---- workflow audit (section 8 + backend 3b) ----
+    wf = wfaudit or {'backend_ce': [], 'page_ce': [], 'orphan': [], 'hidden': []}
+    def kindtag(k):
+        return f"<span class='tag'>{T['wf_kp'] if k == 'page' else T['wf_kr']}</span>"
+    wf_bce_tbl = ''.join(f"<tr><td class='mono'>{esc(r['name'])}</td><td class='mono dim'>{esc(r['id'])}</td>"
+                         f"{chk('customevent:' + str(r['id']), r['name'])}</tr>" for r in wf['backend_ce'])
+    wf_bce_tbl = (f"<table><thead><tr><th>{T['th_event']}</th><th>{T['th_id']}</th>{del_h}</tr></thead><tbody>{wf_bce_tbl}</tbody></table>"
+                  if wf['backend_ce'] else f"<div class='note note-green'>{T['wf_none']}</div>")
+    wf_ce_tbl = ''.join(f"<tr><td class='mono'>{esc(r['name'])}</td><td>{esc(r['container'])} {kindtag(r['kind'])}</td>"
+                        f"<td class='mono dim'>{esc(r['id'])}</td>{chk('customevent:' + str(r['id']), (r['container'] or '') + ' › ' + (r['name'] or ''))}</tr>"
+                        for r in wf['page_ce'])
+    wf_ce_tbl = (f"<table><thead><tr><th>{T['th_event']}</th><th>{T['th_container']}</th><th>{T['th_id']}</th>{del_h}</tr></thead><tbody>{wf_ce_tbl}</tbody></table>"
+                 if wf['page_ce'] else f"<div class='note note-green'>{T['wf_none']}</div>")
+    wf_orphan_tbl = ''.join(f"<tr><td>{esc(r['container'])} {kindtag(r['kind'])}</td><td><span class='tag'>{esc(r['trigger'])}</span></td>"
+                            f"<td class='mono dim'>{esc(r['element_id'])}</td>{chk('pagewf:' + str(r['id']), (r['container'] or '') + ' · ' + (r['trigger'] or ''))}</tr>"
+                            for r in wf['orphan'])
+    wf_orphan_tbl = (f"<table><thead><tr><th>{T['th_container']}</th><th>{T['th_trigger']}</th><th>{T['th_id']} (elem)</th>{del_h}</tr></thead><tbody>{wf_orphan_tbl}</tbody></table>"
+                     if wf['orphan'] else f"<div class='note note-green'>{T['wf_none']}</div>")
+    def hidden_reason(r):
+        if r.get('reason') == 'ancestor':
+            return f"<span class='vbadge v-orange'>{T['wf_h_anc']}</span> <span class='mono'>{esc(r.get('blocker'))}</span>"
+        return f"<span class='vbadge v-red'>{T['wf_h_self']}</span>"
+    wf_hidden_tbl = ''.join(f"<tr><td>{esc(r['container'])} {kindtag(r['kind'])}</td><td><span class='tag'>{esc(r['trigger'])}</span></td>"
+                            f"<td class='mono'>{esc(r['element'])}</td><td>{hidden_reason(r)}</td>"
+                            f"{chk('hiddenwf:' + str(r['id']), (r['container'] or '') + ' · ' + (r.get('element') or ''))}</tr>"
+                            for r in wf['hidden'])
+
+    # ---- API Connector calls (section 9) ----
+    apc = apicalls or {'total': 0, 'used': 0, 'providers': 0, 'unused': []}
+    api_rows = ''.join(f"<tr><td class='mono'>{esc(r['provider'])}</td><td>{esc(r['call'])}</td>"
+                       f"<td><span class='tag'>{esc(r['method'])}</span></td><td class='mono dim'>{esc(r['ref'])}</td>"
+                       f"{chk('apicall:' + str(r['ref']), (r['provider'] or '') + ' › ' + (r['call'] or ''))}</tr>"
+                       for r in apc['unused'])
+    api_tbl = (f"<div class='scroll'><table id='atab'><thead><tr><th>{T['th_provider']}</th><th>{T['th_endpoint']}</th>"
+               f"<th>{T['th_method']}</th><th>Ref</th>{del_h}</tr></thead><tbody>{api_rows}</tbody></table></div>") \
+              if apc['unused'] else f"<div class='note note-green'>{T['api_none']}</div>"
+
+    # ---- ghost plugin references (section 10) ----
+    gh = ghosts or {'refs': [], 'plugin_count': 0, 'plugins': []}
+    wherelab = {'element': T['gw_element'], 'action': T['gw_action'], 'trigger': T['gw_trigger']}
+    def ghost_name_cell(r):
+        nm = esc(r['plugin_name']) if r['plugin_name'] else f"<span class='mono dim'>{esc(r['plugin_id'])}</span>"
+        if r.get('url'):
+            return f"<a href='{esc(r['url'])}' target='_blank' rel='noopener'>{nm} ↗</a>"
+        return nm
+    ghost_rows = ''.join(f"<tr><td>{ghost_name_cell(r)}</td><td class='mono'>{esc(r['container'])}</td>"
+                         f"<td><span class='tag'>{esc(wherelab.get(r['where'], r['where']))}</span></td>"
+                         f"<td class='mono'>{esc(r['location'])}</td>"
+                         f"{chk('ghostref:' + r['plugin_id'] + ':' + (r['container'] or '') + ':' + (r['location'] or ''), (r['plugin_name'] or r['plugin_id']) + ' — ' + (r['container'] or ''))}</tr>"
+                         for r in gh['refs'])
+    ghost_tbl = (f"<div class='scroll'><table id='gtab'><thead><tr><th>{T['th_plug']}</th><th>{T['th_container']}</th>"
+                 f"<th>{T['th_where']}</th><th>{T['th_loc']}</th>{del_h}</tr></thead><tbody>{ghost_rows}</tbody></table></div>") \
+                if gh['refs'] else f"<div class='note note-green'>{T['ghost_none']}</div>"
+
+    caveat = T['caveat_pages'].format(L=dyn['ListGoToPage'], D=dyn['dynamic_page_name'])
+    refurl_block = ''
+    if ref_url_pages:
+        body = ''.join(
+            f"<tr><td class='mono'>{esc(p['name'])}</td><td class='dim'>{esc(p['name_url_hits'])}</td>"
+            f"<td class='mono dim' style='font-size:11.5px'>…{esc(p['name_url_snippet'])}…</td></tr>"
+            for p in ref_url_pages)
+        refurl_block = (f"<div class='note note-green'><strong>{len(ref_url_pages)} · {T['refurl_t']}.</strong> {T['refurl_b']}</div>"
+                        f"<table><thead><tr><th>{T['th_page']}</th><th>{T['th_hits']}</th><th>{T['th_ev']}</th></tr></thead><tbody>{body}</tbody></table>")
+    total_pages = len(pages)
+    return f"""<!doctype html><html lang="{lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{esc(app_name)} — {T['title']}</title>
+<style>
+:root{{--bg:#f6f7f9;--card:#fff;--ink:#1a1f2b;--dim:#6b7280;--line:#e4e7ec;--accent:#2f6bd8;--red:#c0392b;--redbg:#fdecea;--orange:#b9770e;--orangebg:#fdf3e2;--green:#1e7d46;--greenbg:#e8f6ee;--graybg:#eef0f3;--shadow:0 1px 3px rgba(16,24,40,.06)}}
+@media(prefers-color-scheme:dark){{:root{{--bg:#0f1319;--card:#161b23;--ink:#e6e9ef;--dim:#9aa4b2;--line:#262d38;--accent:#6ea0f0;--red:#f0796b;--redbg:#2a1714;--orange:#e0a94a;--orangebg:#2a2011;--green:#63c98d;--greenbg:#12271b;--graybg:#1c222b;--shadow:0 1px 3px rgba(0,0,0,.4)}}}}
+*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}}
+.wrap{{max-width:1160px;margin:0 auto;padding:32px 22px 80px}}h1{{font-size:25px;margin:0 0 4px;letter-spacing:-.02em}}.sub{{color:var(--dim);font-size:13.5px}}
+h2{{font-size:20px;margin:38px 0 10px;scroll-margin-top:118px}}h3{{font-size:15px;margin:22px 0 8px}}.q{{color:var(--accent);font-weight:600}}
+.stickyhead{{position:sticky;top:0;z-index:10;background:var(--bg);margin:6px -22px 12px;padding:9px 22px;border-bottom:1px solid var(--line);box-shadow:0 4px 10px -8px rgba(16,24,40,.35)}}
+.stickyhead .toc{{margin:0 0 8px}}.stickyhead .tracker{{margin:0}}
+.cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:12px;margin:20px 0 6px}}
+.card{{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow)}}
+.card .big{{font-size:29px;font-weight:700;letter-spacing:-.02em;line-height:1.1}}.card .lab{{font-size:12.5px;color:var(--dim);margin-top:3px}}.card .of{{font-size:12px;color:var(--dim)}}
+.k-red .big{{color:var(--red)}}.k-orange .big{{color:var(--orange)}}.k-green .big{{color:var(--green)}}
+.note{{border:1px solid var(--line);border-left-width:4px;border-radius:8px;padding:12px 15px;margin:14px 0;background:var(--card);font-size:14px}}
+.note-blue{{border-left-color:var(--accent)}}.note-amber{{border-left-color:var(--orange);background:var(--orangebg)}}.note-green{{border-left-color:var(--green);background:var(--greenbg)}}
+table{{width:100%;border-collapse:collapse;font-size:13.5px;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}}
+th,td{{text-align:left;padding:7px 11px;border-bottom:1px solid var(--line);vertical-align:top}}th{{background:var(--graybg);font-weight:600;font-size:12.5px;position:sticky;top:0}}tr:last-child td{{border-bottom:none}}
+.scroll{{max-height:520px;overflow:auto;border-radius:10px;border:1px solid var(--line)}}.scroll table{{border:none;border-radius:0}}
+.mono{{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px}}.dim{{color:var(--dim)}}
+.tag{{display:inline-block;background:var(--graybg);border:1px solid var(--line);border-radius:5px;padding:0 6px;font-size:11px;color:var(--dim)}}
+.vbadge{{display:inline-block;border-radius:20px;padding:1px 9px;font-size:11.5px;font-weight:600;white-space:nowrap}}
+.v-red{{background:var(--redbg);color:var(--red)}}.v-orange{{background:var(--orangebg);color:var(--orange)}}.v-green{{background:var(--greenbg);color:var(--green)}}.v-gray{{background:var(--graybg);color:var(--dim)}}
+.filter{{margin:8px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center}}.filter input{{padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:13px;min-width:220px}}
+.pill{{cursor:pointer;border:1px solid var(--line);background:var(--card);border-radius:20px;padding:3px 11px;font-size:12px;color:var(--dim)}}.pill.on{{background:var(--accent);color:#fff;border-color:var(--accent)}}
+.toc{{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0}}.toc a{{font-size:13px;text-decoration:none;color:var(--accent);border:1px solid var(--line);border-radius:20px;padding:4px 12px;background:var(--card)}}
+code{{background:var(--graybg);padding:1px 5px;border-radius:4px;font-size:12.5px}}footer{{margin-top:50px;padding-top:18px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}}
+td a{{color:var(--accent);text-decoration:none}}td a:hover{{text-decoration:underline}}
+.swatch{{display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid var(--line);vertical-align:-2px}}h4{{color:var(--ink)}}
+.cellchk{{text-align:center;width:1%;white-space:nowrap}}.delchk{{width:16px;height:16px;cursor:pointer;accent-color:var(--accent)}}
+tr.done td:not(.cellchk){{opacity:.4;text-decoration:line-through}}
+.tracker{{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:9px 13px;margin:16px 0;box-shadow:var(--shadow)}}
+.tracker .prog{{font-weight:700;font-variant-numeric:tabular-nums}}.tracker .sp{{flex:1}}
+.tracker button,.tracker .btn{{cursor:pointer;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:8px;padding:5px 11px;font-size:12.5px}}
+.tracker button:hover,.tracker .btn:hover{{border-color:var(--accent);color:var(--accent)}}
+.bar{{flex:0 0 150px;height:7px;background:var(--graybg);border-radius:4px;overflow:hidden}}.bar>i{{display:block;height:100%;background:var(--green);width:0;transition:width .2s}}
+@media print{{.stickyhead,.filter{{display:none}}.scroll{{max-height:none;overflow:visible}}h2{{scroll-margin-top:0}}}}
+</style></head><body><div class="wrap">
+<h1>{esc(app_name)} — {T['title']}</h1>
+<div class="sub">{T['sub_src']} · <span class="mono">{esc(app_name)}.bubble</span> · {T['generated']} {esc(date_str)}{' · '+esc(os.path.basename('')) if False else ''}</div>
+<div class="stickyhead">
+<div class="toc"><a href="#p">1 · {T['nv_p']}</a><a href="#r">2 · {T['nv_r']}</a><a href="#b">3 · {T['nv_b']}</a><a href="#o">4 · {T['nv_o']}</a><a href="#pl">5 · {T['nv_pl']}</a><a href="#s">6 · {T['nv_s']}</a><a href="#d">7 · {T['nv_d']}</a><a href="#w">8 · {T['nv_w']}</a><a href="#ap">9 · {T['nv_ap']}</a><a href="#g">10 · {T['nv_g']}</a><a href="#m">{T['nv_m']}</a></div>
+<div class="tracker">
+<span class="prog"><span id="delcount">0 / 0</span></span><span class="bar"><i id="delbar"></i></span>
+<span class="dim">{T['trk_hint']}</span><span class="sp"></span>
+<button onclick="exportProgress('md')" title="{T['trk_export_md_t']}">{T['trk_export_md']}</button>
+<button onclick="exportProgress('json')">{T['trk_export_json']}</button>
+<label class="btn">{T['trk_import']}<input type="file" accept=".md,.markdown,.json,text/markdown,application/json" style="display:none" onchange="importProgress(this.files[0]);this.value=''"></label>
+<button onclick="clearProgress()">{T['trk_clear']}</button>
+</div>
+</div>
+<div class="note note-blue"><strong>{T['how_title']}.</strong> {T['how_body']}</div>
+<div class="cards">
+<div class="card k-orange"><div class="big">{len(unused_pages)}</div><div class="lab">{T['c_pages']}</div><div class="of">{T['of']} {total_pages}</div></div>
+<div class="card k-red"><div class="big">{len(reuse_hard)+len(reuse_trans)}</div><div class="lab">{T['c_reuse']}</div><div class="of">{T['of']} {len(reuse)}</div></div>
+<div class="card k-red"><div class="big">{len(back_hard)+len(back_trans)}</div><div class="lab">{T['c_back']}</div><div class="of">{T['of']} {len(backend)} · {exposed} {T['exposed']}</div></div>
+<div class="card k-orange"><div class="big">{len(opt_unused)}</div><div class="lab">{T['c_opt']}</div><div class="of">{T['of']} {len(opt)}</div></div>
+<div class="card k-red"><div class="big">{len(plug_orphan)}</div><div class="lab">{T['c_plug']}</div><div class="of">{T['of']} {plug_total} · +{len(plug_cfg)}{(' · '+str(len(unused_paid))+' 💲') if unused_paid else ''}</div></div>
+<div class="card k-orange"><div class="big">{len(sty_unused)}</div><div class="lab">{T['c_sty']}</div><div class="of">{T['of']} {len(sty)}</div></div>
+<div class="card k-orange"><div class="big">{n_fcand}</div><div class="lab">{T['c_dtF']}</div><div class="of">+{n_fexp} {T['st_api']}</div></div>
+<div class="card k-red"><div class="big">{len(dtT['unused'])}</div><div class="lab">{T['c_dtT']}</div><div class="of">{T['of']} {dtT['active']} · {dtT['exposed']} API</div></div>
+<div class="card k-orange"><div class="big">{len(wf['backend_ce']) + len(wf['page_ce'])}</div><div class="lab">{T['c_wf']}</div><div class="of">{len(wf['backend_ce'])} backend + {len(wf['page_ce'])} páginas</div></div>
+<div class="card k-red"><div class="big">{len(wf['orphan']) + len(wf['hidden'])}</div><div class="lab">{T['c_wf_orphan']}</div><div class="of">{len(wf['orphan'])} deletado + {len(wf['hidden'])} nunca renderizado</div></div>
+<div class="card k-orange"><div class="big">{len(apc['unused'])}</div><div class="lab">{T['c_api']}</div><div class="of">{T['of']} {apc['total']} · {apc['providers']} APIs</div></div>
+<div class="card k-red"><div class="big">{len(gh['refs'])}</div><div class="lab">{T['c_ghost']}</div><div class="of">{gh['plugin_count']} plugins removidos</div></div>
+</div>
+
+<h2 id="p">{T['s_pages']}</h2><p class="q">{T['q_pages']}</p>
+<div class="note note-amber">{caveat}</div>
+{refurl_block}
+{('<div class=cards>'
+  f'<div class="card k-red"><div class="big">{n_conf}</div><div class="lab">'+T['confirmed']+'</div></div>'
+  f'<div class="card k-orange"><div class="big">{n_cand}</div><div class="lab">'+T['candidate']+'</div></div>'
+  f'<div class="card k-green"><div class="big">{n_inuse}</div><div class="lab">'+T['inuse']+'</div></div>'
+  '</div>') if page_audit else ''}
+<div class="filter"><input id="pf" placeholder="{T['filter_page']}" oninput="fp()">
+<span class="pill on" data-v="all" onclick="pv(this)">{T['all']} ({len(unused_pages)})</span>
+<span class="pill" data-v="confirmed-dead" onclick="pv(this)">{T['confirmed']} ({n_conf})</span>
+<span class="pill" data-v="candidate" onclick="pv(this)">{T['candidate']} ({n_cand})</span>
+<span class="pill" data-v="in-use" onclick="pv(this)">{T['inuse']} ({n_inuse})</span></div>
+<div class="scroll"><table id="ptab"><thead><tr><th>{T['th_page']}</th><th>{T['th_class']}</th>{sheet_hdr}<th>{T['th_id']}</th>{del_h}</tr></thead>
+<tbody>{''.join(prow(p) for p in unused_pages)}</tbody></table></div>
+
+<h2 id="r">{T['s_reuse']}</h2><p class="q">{T['q_reuse']}</p>
+<p><strong>{len(reuse_hard)}</strong> {T['reuse_body']}</p>{reuse_tbl}
+{('<h3>+ '+str(len(reuse_trans))+' transitive</h3>'+reuse_tbl_t) if reuse_trans else ''}
+{('<h3>'+T['dup_reuse_t']+' ('+str(len(reuse_dup))+')</h3><div class="note note-amber">'+T['dup_reuse_b']+'</div>'+reuse_tbl_dup) if reuse_dup else ''}
+
+<h2 id="b">{T['s_back']}</h2><p class="q">{T['q_back']}</p>
+<p>{T['back_body']}</p>
+<div class="cards"><div class="card k-red"><div class="big">{len(back_hard)}</div><div class="lab">{T['direct']}</div></div>
+<div class="card k-orange"><div class="big">{len(back_trans)}</div><div class="lab">{T['trans']}</div></div>
+<div class="card k-green"><div class="big">{exposed}</div><div class="lab">{T['exposed']}</div></div></div>
+<div class="filter"><input id="bf" placeholder="{T['filter_wf']}" oninput="fb()">
+<span class="pill on" data-k="all" onclick="bk(this)">{T['all']} ({len(back_hard)+len(back_trans)})</span>
+<span class="pill" data-k="hard" onclick="bk(this)">{T['direct']} ({len(back_hard)})</span>
+<span class="pill" data-k="trans" onclick="bk(this)">{T['trans']} ({len(back_trans)})</span></div>
+<div class="scroll"><table id="btab"><thead><tr><th>{T['th_wf']}</th><th>{T['th_folder']}</th><th>{T['th_sit']}</th><th>{T['th_id']}</th>{del_h}</tr></thead><tbody>{back_rows}</tbody></table></div>
+<h3>3b · {T['wf_bce_t']} ({len(wf['backend_ce'])})</h3><p class="dim">{T['wf_bce_b']}</p>{wf_bce_tbl}
+
+<h2 id="o">{T['s_opt']}</h2><p class="q">{T['q_opt']}</p>
+<p>{len(opt_unused)} / {len(opt)} ({opt_deleted} {T['already_deleted']}). {T['opt_body']}</p>{opt_tbl}
+
+<h2 id="pl">{T['s_plug']}</h2><p class="q">{T['q_plug']}</p>
+{('<div class="note note-red"><strong>💲 '+str(len(unused_paid))+' '+T['plug_paid_alert']+'</strong><ul>'+''.join('<li><strong>'+esc(p['name'] or p['id'])+'</strong>'+((' — '+esc(p['price'])) if p.get('price') else '')+((' ('+esc(p['pricing_model'])+')') if p.get('pricing_model') else '')+'</li>' for p in unused_paid)+'</ul></div>') if unused_paid else ''}
+<p><strong>{plug_used}</strong>/{plug_total} {T['plug_used']}</p>
+<h3>{T['plug_orphan_t']} ({len(plug_orphan)})</h3><p class="dim">{T['plug_orphan_b']}</p>{plug_tbl(plug_orphan)}
+<h3>{T['plug_cfg_t']} ({len(plug_cfg)})</h3><div class="note note-amber">{T['plug_cfg_b']}</div>{plug_tbl(plug_cfg)}
+<h3>{T['plug_used_t']} ({len(plug_used_rows)})</h3><p class="dim">{T['plug_used_b']}</p>{plug_used_tbl}
+
+<h2 id="s">{T['s_sty']}</h2><p class="q">{T['q_sty']}</p>
+<p>{len(sty_unused)} / {len(sty)}. {T['sty_body']}</p>{sty_tbl}
+<h3>{T['s_var']}</h3><p class="dim">{T['var_body']}</p>
+<h4 style="margin:16px 0 6px;font-size:14px">{T['var_colors_h']} ({len(vcolors['unused'])}) · <span class="dim" style="font-weight:400">{T['var_stat'] % (vcolors['active'], vcolors['deleted'])}</span></h4>{colorvar_tbl}
+<h4 style="margin:16px 0 6px;font-size:14px">{T['var_fonts_h']} ({len(vfonts['unused'])}) · <span class="dim" style="font-weight:400">{T['var_stat'] % (vfonts['active'], vfonts['deleted'])}</span></h4>{fontvar_tbl}
+
+<h2 id="d">{T['s_dt']}</h2><p class="q">{T['q_dt']}</p>
+<div class="note note-blue">{dtF['deleted']} {T['dt_deleted_note']} {dtT['deleted']} {T['dt_tables_deleted']} {dtT['exposed']} {T['dt_exposed_tables']}</div>
+<h3>{T['dt_tables_t']} ({len(dtT['unused'])})</h3><p class="dim">{T['dt_tables_b']}</p>{dt_tables_tbl}
+<h3>{T['dt_fields_t']} ({n_fcand})</h3><p>{T['dt_fields_b']}</p>
+{('<div class="note note-amber">'+str(n_fexp)+' '+T['dt_exposed_note']+'</div>') if n_fexp else ''}
+<div class="filter" id="datafilter"><input id="df" placeholder="{T['th_field']}…" oninput="fd()">
+<span class="pill on" data-f="all" onclick="dv(this)">{T['all']} ({n_fcand + n_fexp})</span>
+<span class="pill" data-f="unused" onclick="dv(this)">{T['st_unused']} ({n_fcand})</span>
+<span class="pill" data-f="api" onclick="dv(this)">{T['st_api']} ({n_fexp})</span></div>
+<div class="scroll"><table id="dtab"><thead><tr><th>{T['th_table']}</th><th>{T['th_field']}</th><th>{T['th_key']}</th><th>{T['th_ftype']}</th><th>{T['th_api']}</th>{del_h}</tr></thead>
+<tbody>{dt_field_rows}</tbody></table></div>
+
+<h2 id="w">{T['s_wf']}</h2><p class="q">{T['q_wf']}</p>
+<h3>{T['wf_ce_t']} ({len(wf['page_ce'])})</h3><p class="dim">{T['wf_ce_b']}</p>
+<div class="scroll">{wf_ce_tbl}</div>
+<h3>{T['wf_orphan_t']} ({len(wf['orphan'])})</h3><p class="dim">{T['wf_orphan_b']}</p>
+<div class="scroll">{wf_orphan_tbl}</div>
+<h3>{T['wf_hidden_t']} ({len(wf['hidden'])})</h3>
+<div class="note note-amber">{T['wf_hidden_b']}</div>
+<div class="filter"><input id="hf" placeholder="{T['th_container']} / {T['th_elem']}…" oninput="fh()"></div>
+<div class="scroll"><table id="htab"><thead><tr><th>{T['th_container']}</th><th>{T['th_trigger']}</th><th>{T['th_elem']}</th><th>{T['th_reason']}</th>{del_h}</tr></thead><tbody>{wf_hidden_tbl}</tbody></table></div>
+
+<h2 id="ap">{T['s_api']}</h2><p class="q">{T['q_api']}</p>
+<p><strong>{len(apc['unused'])}</strong> / {apc['total']}. {T['api_body']}</p>
+<div class="filter"><input id="af" placeholder="{T['filter_api']}" oninput="fa()"></div>
+{api_tbl}
+
+<h2 id="g">{T['s_ghost']}</h2><p class="q">{T['q_ghost']}</p>
+<div class="note note-amber">{T['ghost_body']}</div>
+<p><strong>{len(gh['refs'])}</strong> {('referências · '+str(gh['plugin_count'])+' plugins: '+', '.join((esc(p['name'] or p['id'][:14])+' ('+str(p['count'])+')') for p in gh['plugins'])) if gh['refs'] else ''}</p>
+<div class="filter"><input id="gf" placeholder="{T['filter_ghost']}" oninput="fg2()"></div>
+{ghost_tbl}
+
+<h2 id="m">{T['method']}</h2>
+<div class="note note-blue"><p>Pages: id interno referenced by <code>ChangePage</code>/<code>Link.page</code>/<code>MobileNavigate</code> or anywhere in content.
+Reusables: definition <code>id</code> used as a <code>CustomElement.custom_id</code>. Backend: <code>APIEvent</code> exposed or targeted by <code>ScheduleAPIEvent(OnList)</code>.
+Option sets: token <code>option.&lt;name&gt;</code>. Plugins: element/action <code>type</code> prefix <code>&lt;id&gt;-</code> or config keys. Styles: <code>"style":"&lt;id&gt;"</code>.
+Data fields: field key referenced beyond its declaration (in expressions/workflows/searches) or named in a JS/HTML script; Data types: <code>custom.&lt;type&gt;</code> referenced, any field used, or exposed via <code>exposed_api</code>.
+Limits: direct-URL / email / iframe / dynamic navigation are not statically detectable (hence page confidence levels); orphan plugin names are not stored in the export; field keys shared across tables are treated conservatively (marked used if referenced on any table); Data-API-exposed fields/tables may have external consumers not visible in the export.</p></div>
+<footer>{esc(app_name)} · {total_pages} pages · {len(reuse)} reusables · {len(backend)} API workflows · {len(opt)} option sets · {plug_total} plugins · {len(sty)} styles · {dtT['active']} data tables · {dtF['active']} fields</footer>
+</div><script>
+function fp(){{var q=pf.value.toLowerCase();document.querySelectorAll('#ptab tbody tr').forEach(function(t){{t.style.display=(t.dataset._h!=='1'&&t.cells[0].innerText.toLowerCase().indexOf(q)>=0)?'':'none';}});}}
+function pv(e){{document.querySelectorAll('[data-v]').forEach(p=>p.classList.remove('on'));e.classList.add('on');var v=e.dataset.v;document.querySelectorAll('#ptab tbody tr').forEach(t=>t.dataset._h=(v=='all'||t.dataset.v==v)?'0':'1');fp();}}
+function fb(){{var q=bf.value.toLowerCase();document.querySelectorAll('#btab tbody tr').forEach(function(t){{t.style.display=(t.dataset._h!=='1'&&t.cells[0].innerText.toLowerCase().indexOf(q)>=0)?'':'none';}});}}
+function bk(e){{document.querySelectorAll('[data-k]').forEach(p=>p.classList.remove('on'));e.classList.add('on');var k=e.dataset.k;document.querySelectorAll('#btab tbody tr').forEach(t=>t.dataset._h=(k=='all'||t.dataset.k==k)?'0':'1');fb();}}
+function fd(){{var q=df.value.toLowerCase();document.querySelectorAll('#dtab tbody tr').forEach(function(t){{t.style.display=(t.dataset._h!=='1'&&t.innerText.toLowerCase().indexOf(q)>=0)?'':'none';}});}}
+function dv(e){{document.querySelectorAll('#datafilter .pill[data-f]').forEach(p=>p.classList.remove('on'));e.classList.add('on');var v=e.dataset.f;document.querySelectorAll('#dtab tbody tr').forEach(t=>t.dataset._h=(v=='all'||t.dataset.f==v)?'0':'1');fd();}}
+function fh(){{var q=hf.value.toLowerCase();document.querySelectorAll('#htab tbody tr').forEach(function(t){{t.style.display=(t.innerText.toLowerCase().indexOf(q)>=0)?'':'none';}});}}
+function fa(){{var q=af.value.toLowerCase();document.querySelectorAll('#atab tbody tr').forEach(function(t){{t.style.display=(t.innerText.toLowerCase().indexOf(q)>=0)?'':'none';}});}}
+function fg2(){{var q=gf.value.toLowerCase();document.querySelectorAll('#gtab tbody tr').forEach(function(t){{t.style.display=(t.innerText.toLowerCase().indexOf(q)>=0)?'':'none';}});}}
+/* ---- deletion tracker: localStorage live store + .md/.json export/import ---- */
+const APP_ID={json.dumps(app_name)};
+const INITIAL={json.dumps(initial_deleted)};
+const TITLES={json.dumps(EXPORT_TITLES)};
+const NS='bubble_audit::'+APP_ID;
+function _load(){{let s=null;try{{s=JSON.parse(localStorage.getItem(NS));}}catch(e){{}}if(!s){{s={{}};INITIAL.forEach(k=>s[k]=1);_save(s);}}return s;}}
+function _save(s){{try{{localStorage.setItem(NS,JSON.stringify(s));}}catch(e){{}}}}
+let DEL=_load();
+function _count(){{var all=document.querySelectorAll('.delchk'),n=0;all.forEach(c=>{{if(DEL[c.dataset.key])n++;}});var t=all.length;document.getElementById('delcount').textContent=n+' / '+t;document.getElementById('delbar').style.width=(t?100*n/t:0)+'%';}}
+function _apply(){{document.querySelectorAll('.delchk').forEach(function(c){{var on=!!DEL[c.dataset.key];c.checked=on;c.closest('tr').classList.toggle('done',on);}});_count();}}
+document.addEventListener('change',function(e){{if(!e.target.classList||!e.target.classList.contains('delchk'))return;var k=e.target.dataset.key;if(e.target.checked)DEL[k]=1;else delete DEL[k];e.target.closest('tr').classList.toggle('done',e.target.checked);_save(DEL);_count();}});
+function _dl(text,name,type){{var b=new Blob([text],{{type:type}});var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}}
+function exportProgress(fmt){{
+ var groups={{}},order=['page','reusable','workflow','customevent','pagewf','hiddenwf','apicall','ghostref','optionset','plugin','style','colorvar','fontvar','datatype','field'];
+ document.querySelectorAll('.delchk').forEach(function(c){{var cat=c.dataset.key.split(':')[0];(groups[cat]=groups[cat]||[]).push(c);}});
+ if(fmt==='json'){{var out={{app:APP_ID,updated:new Date().toISOString().slice(0,10),deleted:Object.keys(DEL).filter(k=>DEL[k])}};_dl(JSON.stringify(out,null,1),'bubble_cleanup_progress__'+APP_ID+'.json','application/json');return;}}
+ var md='# Bubble cleanup progress — '+APP_ID+String.fromCharCode(10)+String.fromCharCode(10)+'> '+{json.dumps(T['md_hint'])}+String.fromCharCode(10)+'> Updated: '+new Date().toISOString().slice(0,10)+String.fromCharCode(10);
+ order.forEach(function(cat){{if(!groups[cat])return;md+=String.fromCharCode(10)+'## '+(TITLES[cat]||cat)+String.fromCharCode(10);groups[cat].forEach(function(c){{md+='- ['+(DEL[c.dataset.key]?'x':' ')+'] `'+c.dataset.key+'` — '+(c.dataset.label||'')+String.fromCharCode(10);}});}});
+ _dl(md,'bubble_cleanup_progress__'+APP_ID+'.md','text/markdown');
+}}
+function importProgress(file){{if(!file)return;var r=new FileReader();r.onload=function(){{var t=r.result;
+ if(/\\.json$/i.test(file.name)){{try{{var j=JSON.parse(t);var arr=Array.isArray(j)?j:(j.deleted||[]);DEL={{}};arr.forEach(k=>DEL[k]=1);}}catch(e){{alert('Invalid JSON');return;}}}}
+ else{{var on=/- \\[[xX]\\]\\s*`([^`]+)`/g,off=/- \\[ \\]\\s*`([^`]+)`/g,m;while(m=on.exec(t))DEL[m[1]]=1;while(m=off.exec(t))delete DEL[m[1]];}}
+ _save(DEL);_apply();}};r.readAsText(file);}}
+function clearProgress(){{if(!confirm({json.dumps(T['clear_confirm'])}))return;DEL={{}};_save(DEL);_apply();}}
+_apply();
+</script></body></html>"""
+
+# ------------------------------------------------------------------ main
+def main():
+    ap = argparse.ArgumentParser(description='Static unused-entities audit for a Bubble .bubble export.')
+    ap.add_argument('input', help='path to the .bubble export file')
+    ap.add_argument('--out', help='output HTML report path (default: <input>_unused_report.html)')
+    ap.add_argument('--json', help='also write raw results as JSON to this path')
+    ap.add_argument('--pages-csv', help='optional page-audit CSV to cross-reference (join on page name)')
+    ap.add_argument('--pages-csv-name-col', help='column in the CSV holding the page name (default: first column)')
+    ap.add_argument('--pages-csv-status-col', action='append',
+                    help='column(s) whose text carries usage status (repeatable; default: auto-detect)')
+    ap.add_argument('--lang', choices=['pt', 'en'], default='pt', help='report language (default: pt)')
+    ap.add_argument('--date', default='', help='date string to stamp on the report (e.g. 2026-07-09)')
+    ap.add_argument('--state', help='progress file (.md or .json exported from the report) to pre-mark already-deleted items')
+    ap.add_argument('--plugin-names', help='optional JSON {pluginId: name} to override/extend the bundled marketplace name registry')
+    ap.add_argument('--plugin-pricing', help='optional JSON {pluginId: {status,model,price}} to override/extend the bundled pricing registry')
+    args = ap.parse_args()
+
+    log('loading', args.input, '...')
+    with open(args.input, encoding='utf-8') as f:
+        data = json.load(f)
+    app_name = data.get('_id') or os.path.splitext(os.path.basename(args.input))[0]
+
+    content_raw, quoted = build_index(data)
+    domains = app_domains(data)
+    url_corpus = build_url_corpus(data)
+    log('url/script corpus:', len(url_corpus), 'chars; app domains:', domains)
+    pages, dyn = analyze_pages(data, quoted, url_corpus, domains)
+    reuse = analyze_reusables(data, quoted)
+    backend, exposed = analyze_backend(data, quoted)
+    opt = analyze_optionsets(data, content_raw)
+    sty = analyze_styles(data, content_raw)
+    variables = analyze_variables(data, content_raw)
+    plug_registry = load_plugin_registry(args.plugin_names)
+    plug_pricing = load_plugin_pricing(args.plugin_pricing)
+    plug_orphan, plug_cfg, plug_used_list, plug_total = analyze_plugins(data, content_raw, plug_registry, plug_pricing)
+    script_corpus = build_script_corpus(data)
+    dt = analyze_datatypes(data, quoted, content_raw, script_corpus)
+    wfaudit = analyze_workflows(data)
+    apicalls = analyze_api_calls(data)
+    ghosts = analyze_ghost_plugins(data, plug_registry)
+
+    page_audit = {}
+    if args.pages_csv:
+        page_audit = load_page_audit(args.pages_csv, args.pages_csv_name_col, args.pages_csv_status_col)
+        log('page audit rows:', len(page_audit))
+
+    initial_deleted = load_state(args.state)
+    if args.state:
+        log('pre-marked from state:', len(initial_deleted))
+    html_str = render_html(app_name, args.date, args.lang, pages, dyn, page_audit, reuse,
+                           backend, exposed, opt, sty, plug_orphan, plug_cfg, len(plug_used_list), plug_total,
+                           dt, plug_used_list=plug_used_list, variables=variables, wfaudit=wfaudit,
+                           apicalls=apicalls, ghosts=ghosts, initial_deleted=initial_deleted)
+    out = args.out or (os.path.splitext(args.input)[0] + '_unused_report.html')
+    with open(out, 'w', encoding='utf-8') as f:
+        f.write(html_str)
+
+    up = [p for p in pages if p['unused']]
+    ref_url = [p for p in pages if p.get('referenced_by_url')]
+    summary = {
+        'app': app_name,
+        'pages': {'total': len(pages), 'no_internal_nav': len(up) + len(ref_url),
+                  'unused': [{'name': p['name'], 'inner_id': p['inner_id']} for p in up],
+                  'referenced_by_url': [{'name': p['name'], 'inner_id': p['inner_id'],
+                                         'hits': p['name_url_hits'], 'evidence': p['name_url_snippet']} for p in ref_url],
+                  'dynamic_nav': dyn},
+        'reusables': {'total': len(reuse),
+                      'unused_hard': [{'name': r['name'], 'inner_id': r['inner_id']} for r in reuse if r['unused_hard']],
+                      'unused_transitive': [{'name': r['name'], 'inner_id': r['inner_id']} for r in reuse if r['unused_transitive']],
+                      'duplicate_name': [{'name': r['name'], 'inner_id': r['inner_id'], 'used_twin': r['twin_used_id']} for r in reuse if r.get('dup_name_conflict')]},
+        'backend': {'total_apievents': len(backend), 'exposed': exposed,
+                    'unused_hard': [{'wf_name': r['wf_name'], 'inner_id': r['inner_id'], 'folder': r['folder']} for r in backend if r['unused_hard']],
+                    'unused_transitive': [{'wf_name': r['wf_name'], 'inner_id': r['inner_id'], 'folder': r['folder']} for r in backend if r['unused_transitive']]},
+        'option_sets': {'total': len(opt), 'unused': [{'name': o['name'], 'display': o['display']} for o in opt if o['unused']]},
+        'plugins': {'total': plug_total, 'used_with_ui': len(plug_used_list), 'orphaned': plug_orphan,
+                    'configured_no_ui': plug_cfg, 'in_use': plug_used_list,
+                    'unused_paid': [{'id': p['id'], 'name': p['name'], 'price': p['price'],
+                                     'model': p['pricing_model']} for p in (plug_orphan + plug_cfg) if p.get('paid')]},
+        'styles': {'total': len(sty), 'unused': [{'id': s['id'], 'display': s['display'], 'type': s['stype']} for s in sty if s['unused']]},
+        'variables': {'colors': {'active': variables['colors']['active'], 'deleted': variables['colors']['deleted'],
+                                 'unused': variables['colors']['unused']},
+                      'fonts': {'active': variables['fonts']['active'], 'deleted': variables['fonts']['deleted'],
+                                'unused': variables['fonts']['unused']}},
+        'data_tables': {'active': dt['types']['active'], 'exposed_data_api': dt['types']['exposed'],
+                        'deleted': dt['types']['deleted'], 'unused': dt['types']['unused']},
+        'data_fields': {'active': dt['fields']['active'], 'deleted': dt['fields']['deleted'],
+                        'exposed_data_api_only': len(dt['fields']['exposed']),
+                        'referenced_in_script': len(dt['fields']['script']),
+                        'unused': dt['fields']['candidates']},
+        'workflow_audit': {'backend_custom_events_uncalled': wfaudit['backend_ce'],
+                           'page_custom_events_uncalled': wfaudit['page_ce'],
+                           'triggers_on_missing_element': wfaudit['orphan'],
+                           'triggers_on_hidden_element_leads': wfaudit['hidden']},
+        'api_connector': {'total_calls': apicalls['total'], 'used': apicalls['used'],
+                          'providers': apicalls['providers'], 'unused': apicalls['unused']},
+        'removed_plugin_refs': {'total': len(ghosts['refs']), 'plugin_count': ghosts['plugin_count'],
+                                'plugins': ghosts['plugins'], 'refs': ghosts['refs']},
+    }
+    if args.json:
+        with open(args.json, 'w', encoding='utf-8') as f:
+            json.dump(summary, f, indent=1, ensure_ascii=False)
+
+    print('== Bubble unused-entities audit: %s ==' % app_name)
+    print('  Pages           : %d / %d no id-navigation; of those %d linked by URL/name (kept) -> %d deletable candidates'
+          % (len(up) + len(ref_url), len(pages), len(ref_url), len(up)))
+    print('  Reusables       : %d never placed (+%d transitively dead, %d duplicate-name to verify) / %d'
+          % (len(summary['reusables']['unused_hard']), len(summary['reusables']['unused_transitive']),
+             len(summary['reusables']['duplicate_name']), len(reuse)))
+    print('  Backend WFs     : %d unreachable (+%d transitive) / %d APIEvents (%d exposed endpoints)'
+          % (len(summary['backend']['unused_hard']), len(summary['backend']['unused_transitive']), len(backend), exposed))
+    print('  Option sets     : %d unused / %d' % (len(summary['option_sets']['unused']), len(opt)))
+    _paid = [p for p in (plug_orphan + plug_cfg) if p.get('paid')]
+    print('  Plugins         : %d orphaned (+%d no-UI-but-active) / %d | UNUSED PAID (alert): %d'
+          % (len(plug_orphan), len(plug_cfg), plug_total, len(_paid)))
+    print('  Styles          : %d unused / %d' % (len(summary['styles']['unused']), len(sty)))
+    print('  Color/font vars : %d color + %d font unused (of %d/%d active)'
+          % (len(variables['colors']['unused']), len(variables['fonts']['unused']),
+             variables['colors']['active'], variables['fonts']['active']))
+    print('  Custom events   : %d backend + %d page/reusable never called'
+          % (len(wfaudit['backend_ce']), len(wfaudit['page_ce'])))
+    _hs = sum(1 for r in wfaudit['hidden'] if r.get('reason') == 'self')
+    print('  Dead triggers   : %d on deleted element + %d never-rendered (%d element itself, %d hidden ancestor group)'
+          % (len(wfaudit['orphan']), len(wfaudit['hidden']), _hs, len(wfaudit['hidden']) - _hs))
+    print('  API Connector   : %d unused calls / %d declared (%d providers)'
+          % (len(apicalls['unused']), apicalls['total'], apicalls['providers']))
+    print('  Removed plugins : %d ghost references from %d uninstalled plugins still in the app'
+          % (len(ghosts['refs']), ghosts['plugin_count']))
+    print('  Data tables     : %d unused / %d active (%d exposed in Data API, %d already deleted)'
+          % (len(dt['types']['unused']), dt['types']['active'], dt['types']['exposed'], dt['types']['deleted']))
+    print('  Data fields     : %d unused (+%d exposed-Data-API-only, %d already deleted)'
+          % (len(dt['fields']['candidates']), len(dt['fields']['exposed']), dt['fields']['deleted']))
+    if page_audit:
+        conf = sum(1 for p in up if page_audit.get(p['name'], {}).get('verdict') == 'confirmed-dead')
+        cand = sum(1 for p in up if page_audit.get(p['name'], {}).get('verdict') == 'candidate')
+        print('  Page cross-ref  : %d confirmed-dead + %d candidates corroborated by the sheet' % (conf, cand))
+    print('  HTML report ->', out)
+    if args.json:
+        print('  JSON  ->', args.json)
+
+if __name__ == '__main__':
+    main()

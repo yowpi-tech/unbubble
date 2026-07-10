@@ -1,0 +1,213 @@
+---
+name: audit
+description: >
+  Audit a Bubble.io app export (a .bubble file) to find UNUSED / dead entities that can be
+  safely deleted: pages never navigated to, reusable elements never placed, backend API
+  workflows that are neither exposed as an endpoint nor triggered, Option Sets referenced
+  nowhere, installed plugins with no elements/actions/config, styles applied to no element,
+  data FIELDS and TABLES (data types) that are never used — including whether each is
+  exposed in Bubble's native Data API — and a workflow audit: CUSTOM EVENTS (backend and page)
+  that are never called, plus workflows whose trigger element was deleted or is never rendered
+  (itself or via a parent group that never shows) and so can never fire; and API Connector
+  endpoints/calls that are declared but never invoked; and elements/actions referencing a plugin
+  that was removed/uninstalled (broken ghost references). Produces a self-contained,
+  interactive HTML report with
+  confidence levels and a deletion tracker, plus a JSON summary. Use this WHENEVER the user
+  hands you a `.bubble` file or a Bubble app export and asks anything like: what can I delete /
+  clean up / remove, which pages/plugins/workflows/option sets/styles/fields/tables/data types
+  are unused, what's exposed in the Data API, reduce technical debt, slim down or audit a Bubble
+  app, "quais páginas/plugins/workflows/campos/tabelas posso excluir", "o que não está sendo
+  usado", "campos ou tabelas sem uso", "limpar o app Bubble", or dead-code / orphan analysis of
+  a Bubble project. Trigger even if they only mention one category (e.g. "which plugins aren't
+  used", "unused database fields", "custom events never called", "dead workflows", or "unused API
+  Connector calls") — the skill answers all nine areas and the user can read just the part they need. Also use to cross-reference a page-audit spreadsheet against what the app
+  actually references.
+---
+
+# Bubble unused-entities audit
+
+> **UnBubble pipeline — step 1 of 3.** This audit exists so the app owner can DELETE the dead
+> entities inside the Bubble editor and then **re-export a lean `.bubble`**. That lean export is
+> the input for **`unbubble:clone`** (step 2: as-is technical documentation + clone PRD) and then
+> **`unbubble:level-up`** (step 3: re-architecture + data-migration plan). After delivering the
+> audit report, tell the user this next step exists.
+
+## What this does and why it's hard
+
+A Bubble app export (`.bubble`) is one giant single-line JSON — often 50–150 MB. There is no
+built-in "find unused things" feature, and a naive text search gives false answers because
+Bubble references entities in six different, non-obvious ways. This skill encodes the real
+reference model so you can reliably tell an app owner what is safe to delete.
+
+The output is a polished HTML report (interactive tables, filters, confidence badges, light/dark)
+that answers seven questions:
+
+1. **Pages** that can be deleted (not navigated to / referenced)
+2. **Reusable elements** that can be deleted (never placed)
+3. **Backend workflows** unused *and* not exposed as an API endpoint
+4. **Option Sets** used nowhere
+5. **Plugins** installed but unused
+6. **Styles** not applied to any element — plus unused **color & font variables** (design tokens)
+7. **Data fields & tables** never used — and whether each is exposed in the native **Data API**
+8. **Workflow audit** — **Custom Events** (backend + page/reusable) never called; workflows whose
+   trigger element was **deleted**; and workflows whose trigger element is **never rendered** —
+   itself or via a **parent group that never shows**, accounting for default visibility, Show
+   actions AND conditional `states` (the Conditional tab). Verified false-positive-free on a sample.
+9. **API Connector** — declared API endpoints (calls) that are **never invoked** as a data source
+   or a workflow action anywhere (`apiconnector2-<api>.<call>` appears nowhere).
+10. **Removed-plugin references** — elements/actions whose plugin id (`<pluginId>-…` type) is NOT in
+    the installed-plugins list: the plugin was **uninstalled** but the references remain (broken
+    ghost refs). Listed with plugin name + page/reusable + the exact element or workflow.
+
+## The one thing to run
+
+Everything is done by one dependency-free script (Python 3.8+ stdlib only). **Do not re-derive
+the analysis by hand or write your own parser** — this script encodes reference rules that are
+easy to get subtly wrong, and it has been validated to reproduce a hand-audit exactly.
+
+```bash
+python3 scripts/bubble_audit.py "path/to/export.bubble"
+```
+
+Common options:
+
+```bash
+python3 scripts/bubble_audit.py export.bubble \
+  --out report.html \        # HTML report path (default: <input>_unused_report.html)
+  --json results.json \      # also emit a machine-readable summary
+  --lang pt \                # report language: pt (default) or en
+  --date 2026-07-09 \        # date stamp shown in the report header
+  --pages-csv audit.csv \    # optional: cross-reference a page-audit spreadsheet (see below)
+  --state progress.md \      # optional: pre-check items already deleted (from the report's Export)
+  --plugin-names names.json  # optional: extra {pluginId: name} to extend the bundled registry
+```
+
+The script prints a summary to stdout and writes the HTML report. It runs in a few seconds even
+on a 100 MB file. It never modifies the export.
+
+### Workflow
+
+1. **Locate the export.** Ask for the `.bubble` file path if not given. These are usually in
+   Downloads. They're large — never `cat`/read the whole file into context; the script streams it.
+2. **Run the script** with `--out` pointing somewhere sensible (next to the export, or the
+   project). Pass `--lang pt` for a Portuguese report if the user works in Portuguese.
+3. **Read the stdout summary** and relay the headline counts to the user, then point them at the
+   HTML report file. Lead with the high-confidence categories (backend workflows, option sets,
+   reusables, styles) and frame pages carefully (see caveats).
+4. **Verify the report renders** if you have a browser/preview available (serve the folder with
+   `python3 -m http.server` — note macOS blocks serving `~/Downloads`, so copy the HTML to a
+   temp dir first, or write it there with `--out`).
+5. Offer follow-ups: a CSV/checklist export, a deeper dive on one category, or wiring the
+   deletions into a cleanup plan.
+
+## Confidence levels — this is the most important part to communicate
+
+Not every "unreferenced" entity is safe to delete. Be honest about this; it's what makes the
+report trustworthy.
+
+- **High confidence (act on these first):** backend workflows, option sets, reusable elements,
+  and styles. Their reference mechanisms are deterministic and fully captured. A non-exposed
+  `APIEvent` that is scheduled nowhere literally cannot run; an option set whose `option.<name>`
+  token appears nowhere is genuinely unreferenced.
+- **Data fields & tables (section 7):** a field is unused if its key appears in no expression,
+  workflow, search, privacy rule or JS/HTML script; a table if it is referenced nowhere as
+  `custom.<type>`, has no used field, and is not exposed. Two nuances to always convey: (a) fields
+  whose **table is exposed in the Data API** are shown in a *separate* "exposed — verify" bucket
+  because external consumers aren't in the export; (b) deleting a data type/field **deletes its
+  data** — this is destructive, so frame it as "no references found; confirm no data to keep,"
+  not "safe to delete." Field keys shared across tables are handled conservatively (marked used if
+  referenced on any table), so the unused-field list under-reports rather than over-claims.
+- **Lower confidence — needs a human:** **pages** and some **plugins**. Every Bubble page has its
+  own public URL, so a page with no internal navigation may still be a live entry point opened by
+  **direct URL, email link, or iframe/embed** (common in apps with embedded sub-tools). Dynamic
+  navigation (`ListGoToPage`, dynamic page name) also can't be resolved statically. Plugins can run
+  **server-side** (social login, DocuSign, Mailchimp, injected headers/scripts) with no visible
+  element, or be **headless/global** — active project-wide the moment they're installed with no
+  placed element (e.g. **Classify** applies CSS via the element ID; SEO/analytics/header plugins).
+  So "no footprint" ≠ "safe to delete" for plugins: the orphaned bucket is a *review* list, and
+  known global plugins are routed to a "verify" bucket (curated `HEADLESS_PLUGINS` in the script —
+  add newly-found ones there). Config-based plugins are also handled (**Zapier** via
+  `settings.zapier.zaps`, `dbconnector` via queries). And **unused PAID plugins** are flagged
+  loudest (recurring wasted cost) — pricing comes from a marketplace-researched
+  `references/plugin_pricing.json`, shown as a red alert + `💲 paid · price` badge.
+
+  To shrink the page false-positive set, the script does a **second pass**: for every page with no
+  id-navigation it searches the page's **name (URL slug)** across all link URLs, Run-JavaScript
+  action code, HTML embeds and header scripts, looking for a real app URL to that page
+  (`<app-domain>/[version-…/]<slug>`). Pages found this way — typically **OAuth callbacks**
+  (e.g. `sso_landing`) and **links in emails/messages** (e.g. `confirm_email`,
+  `approve_order`) — are moved out of the deletable list into a "referenced by URL/name — keep" section
+  with the evidence snippet. This catches references the id-based scan structurally cannot see.
+  A page still can't be proven safe by static analysis alone (bare-name JS navigation and truly
+  external links remain undetectable), so keep framing the remainder as *candidates to review*.
+
+Always tell the user: **start with the high-confidence deletions; treat the page list as
+candidates to review, not a delete list.**
+
+## Plugin names & marketplace links
+
+Marketplace plugins appear in the export only as an opaque id + version (no name). The report shows,
+for **every** plugin (unused *and* an in-use reference list), a **clickable link to its marketplace
+page** (`https://bubble.io/plugin/<id>`) and — when known — its **display name**. Names come from a bundled registry at
+`references/plugin_names.json` (plugin ids are **marketplace-global**, so the same id is the same
+plugin in every app — the cache is reused across projects), the short-name label map, or an
+`--plugin-names` override file.
+
+When you encounter plugin ids that aren't in the registry yet, resolve them by fetching
+`https://bubble.io/plugin/<id>` (WebFetch works — read the page title/name) and add
+`"<id>": "<name>"` to `references/plugin_names.json` so future runs (and other projects) get the
+name for free. A page that returns only Bubble's generic shell means the plugin is **delisted** —
+store `null` for it; the report flags those as "likely delisted," which is itself a strong
+safe-to-remove signal. Do this only when a report actually surfaces unknown plugins — don't
+pre-resolve the whole marketplace.
+
+## Optional: cross-reference a page-audit spreadsheet
+
+Teams often keep a spreadsheet inventorying pages (a status or a planned-action column,
+etc.). Pass it with `--pages-csv audit.csv` to join it against what the app actually references.
+The script auto-detects the page-name column (first column by default; override with
+`--pages-csv-name-col`) and any status-like columns (override/add with `--pages-csv-status-col`,
+repeatable). Each no-navigation page then gets a verdict — **in-use** (team says it's live →
+don't delete), **candidate** (team is unsure), or **confirmed-dead** (team already flagged it) —
+so the human signal and the static signal reinforce each other.
+
+If the audit lives in Google Sheets, download a tab as CSV first:
+`curl -sL "https://docs.google.com/spreadsheets/d/<ID>/export?format=csv" -o audit.csv`
+(For a specific tab use xlsx and read the sheet, or append `&gid=<gid>`.)
+
+## Reference model (for debugging or extending)
+
+If a result looks wrong, or you need to adapt to an unusual export, read
+`references/reference-model.md`. It documents exactly how each entity is stored and referenced
+(page inner-id vs dict-key, `CustomElement.custom_id`, `ScheduleAPIEvent.api_event`,
+`option.<name>`, plugin `type` prefixes, the `"style":"<id>"` pattern), the instance-suffix
+gotcha, and which top-level sections must be excluded from usage scanning (`_index`, `comments`,
+`holding_pen`). Skim it before changing the script.
+
+## Deletion tracker (checkbox column + progress persistence)
+
+Every deletable-entity table has a **"Deleted?" checkbox column** so the user can tick items off as
+they remove them from Bubble. Persistence is layered, because a static HTML page cannot auto-write a
+file (browsers sandbox that):
+
+- **localStorage** is the live store — ticking a box saves instantly (namespaced by app id) and
+  survives reloads, with zero friction and no server. Ticked rows show struck-through.
+- **Export → `.md`** (and `.json`) produces a portable, git-committable checklist. The `.md` uses
+  `- [x] \`<category>:<id>\` — <label>` lines; the backticked `<category>:<id>` is the stable key
+  (survives report regeneration because it's keyed by entity id, not row position).
+- **Import** reads a previously exported `.md`/`.json` back into the checkboxes (e.g. on another
+  machine, or after regenerating the report).
+- **Script `--state <file.md|.json>`** pre-marks already-deleted items when generating a fresh
+  report, so the loop closes: *run → tick as you delete → Export .md → commit → next run `--state
+  progress.md`.* The `.md`/`.json` is the durable source of truth; localStorage is the in-browser
+  working copy.
+
+Recommend this flow to the user: work in the browser (autosaved), and Export the `.md` when they
+want a durable/committable record. When regenerating the report later, pass that file to `--state`.
+
+## Output structure (don't reinvent it)
+
+The script already emits a complete, self-contained HTML report — interactive filters, confidence
+badges, a deletion-tracker toolbar, per-category tables, a methodology/limits section, light/dark
+theming, print CSS. Point the user to that file rather than rebuilding a report in the chat. Use the
+stdout summary (and `--json`) for your own narration and any follow-up analysis.
