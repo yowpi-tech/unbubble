@@ -597,10 +597,12 @@ def analyze_api_calls(data):
     """API Connector calls declared but never invoked.
 
     `settings.client_safe.apiconnector2` = {apiId: {human: <provider name>, calls: {callId: {name,
-    url, method, ...}}, auth...}}. A call is invoked as the `type` `apiconnector2-<apiId>.<callId>`
-    on an element data source (data call) or a workflow action (action call). A call is unused if
-    that type appears nowhere in the app logic. OAuth `token_call` / `oauth_user_data_call` calls
-    are invoked automatically by the auth flow (not via that type) — treat them as used.
+    url, method, ...}}, auth...}}. A call is invoked in TWO distinct serialized forms:
+      - workflow ACTION: the action `type` is `apiconnector2-<apiId>.<callId>`   (HYPHEN)
+      - DATA SOURCE:     the expression carries `"provider":"apiconnector2.<apiId>.<callId>"` (DOT)
+    A call is unused only if NEITHER form appears in the app logic — checking just the hyphen form
+    false-flags every call used purely as a data source. OAuth `token_call` / `oauth_user_data_call`
+    calls are invoked automatically by the auth flow (not via those forms) — treat them as used.
 
     Also detects SELF-API calls — the app calling its own Workflow API (URL ending in
     `/wf/<wf_name>` or `<placeholder>]/<wf_name>` where <wf_name> is a backend APIEvent's name).
@@ -638,7 +640,7 @@ def analyze_api_calls(data):
                 continue
             total += 1
             ref = apiid + '.' + callid
-            invoked = ('apiconnector2-' + ref) in applogic
+            invoked = ('apiconnector2-' + ref) in applogic or ('apiconnector2.' + ref) in applogic
             is_auth = callid in auth_calls or 'token' in (call.get('name') or '').lower()
             self_wf = selfapi_target(call.get('url'))
             if invoked or is_auth:
@@ -1066,7 +1068,7 @@ STR = {
   'nv_ap': 'APIs',
   's_api': '9 · API Connector — endpoints declarados sem uso',
   'q_api': 'Quais chamadas de API declaradas no API Connector nunca são usadas (nem como data source nem como action)?',
-  'api_body': 'Chamadas declaradas no API Connector cujo tipo <code>apiconnector2-&lt;api&gt;.&lt;call&gt;</code> não aparece em nenhum data source ou ação de workflow. Chamadas de OAuth/<em>token</em> (disparadas automaticamente pela autenticação) são tratadas como usadas. Resíduo a verificar: chamadas montadas dinamicamente.',
+  'api_body': 'Chamadas declaradas no API Connector que não aparecem em nenhuma das duas formas de uso: ação de workflow (type <code>apiconnector2-&lt;api&gt;.&lt;call&gt;</code>) nem fonte de dados (<code>provider: apiconnector2.&lt;api&gt;.&lt;call&gt;</code>). Chamadas de OAuth/<em>token</em> (disparadas automaticamente pela autenticação) são tratadas como usadas. Resíduo a verificar: chamadas montadas dinamicamente.',
   'c_api': 'Endpoints de API sem uso',
   'th_provider': 'API (provider)', 'th_endpoint': 'Endpoint (call)', 'th_method': 'Método',
   'api_none': 'Todas as chamadas de API declaradas são usadas.', 'filter_api': 'filtrar por API / endpoint…',
@@ -1184,7 +1186,7 @@ STR = {
   'nv_ap': 'APIs',
   's_api': '9 · API Connector — declared endpoints never used',
   'q_api': 'Which API Connector calls are declared but never used (as a data source or an action)?',
-  'api_body': 'Calls declared in the API Connector whose type <code>apiconnector2-&lt;api&gt;.&lt;call&gt;</code> appears in no data source or workflow action. OAuth/<em>token</em> calls (fired automatically by authentication) are treated as used. Residual to verify: calls assembled dynamically.',
+  'api_body': 'Calls declared in the API Connector that appear in neither usage form: workflow action (type <code>apiconnector2-&lt;api&gt;.&lt;call&gt;</code>) nor data source (<code>provider: apiconnector2.&lt;api&gt;.&lt;call&gt;</code>). OAuth/<em>token</em> calls (fired automatically by authentication) are treated as used. Residual to verify: calls assembled dynamically.',
   'c_api': 'Unused API endpoints',
   'th_provider': 'API (provider)', 'th_endpoint': 'Endpoint (call)', 'th_method': 'Method',
   'api_none': 'All declared API calls are used.', 'filter_api': 'filter by API / endpoint…',
