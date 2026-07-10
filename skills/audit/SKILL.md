@@ -107,7 +107,10 @@ report trustworthy.
 - **High confidence (act on these first):** backend workflows, option sets, reusable elements,
   and styles. Their reference mechanisms are deterministic and fully captured. A non-exposed
   `APIEvent` that is scheduled nowhere literally cannot run; an option set whose `option.<name>`
-  token appears nowhere is genuinely unreferenced.
+  token appears nowhere is genuinely unreferenced. Two exposure subtleties the script already
+  handles (do not "simplify" them away): a **missing `expose` key means EXPOSED** (Bubble only
+  serializes `expose: false` when the checkbox is unchecked), and workflows the app calls on
+  itself via an **API Connector self-call** (`…/wf/<name>`) count as used.
 - **Data fields & tables (section 7):** a field is unused if its key appears in no expression,
   workflow, search, privacy rule or JS/HTML script; a table if it is referenced nowhere as
   `custom.<type>`, has no used field, and is not exposed. Two nuances to always convey: (a) fields

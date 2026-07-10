@@ -318,9 +318,18 @@ def analyze_reusables(data, quoted):
                      'dup_name_conflict': dup_conflict, 'twin_used_id': twin_used_id})
     return rows
 
-def analyze_backend(data, quoted):
+def analyze_backend(data, quoted, selfapi_used=None):
+    """`selfapi_used` = wf_names targeted by USED API Connector self-calls (app calling its own
+    Workflow API) — these count as references even though no ScheduleAPIEvent points at them."""
     api = data.get('api', {})
-    folders = (data.get('settings', {}).get('client_safe', {}) or {}).get('api_wf_folder_list', {}) or {}
+    selfapi_used = selfapi_used or set()
+    client_safe = data.get('settings', {}).get('client_safe', {}) or {}
+    folders = client_safe.get('api_wf_folder_list', {}) or {}
+    # Bubble's per-workflow "Expose as a public API workflow" checkbox is serialized only when it
+    # differs from the default: a MISSING `expose` key means EXPOSED (verified empirically — the
+    # absent-key workflows are exactly the ones the app itself calls via API Connector self-calls).
+    # Gated on the app-level Workflow API switch: with the API off nothing is reachable externally.
+    wf_api_on = bool(client_safe.get('exposes_wf_api', True))
     # scheduled targets from ANYWHERE, and specifically from page/def (client) contexts
     sched_all, sched_client = set(), set()
     def grab(node, into):
@@ -352,11 +361,14 @@ def analyze_backend(data, quoted):
         walk(v.get('actions'), lambda n, s=iid: grab(n, edges[s]))
         rows.append({'inner_id': iid, 'wf_name': p.get('wf_name'),
                      'folder': folders.get(p.get('wf_folder'), '(no folder)'),
-                     'expose': bool(p.get('expose')),
+                     'expose': bool(p.get('expose', wf_api_on)),
+                     'expose_explicit': 'expose' in p,
+                     'self_api': p.get('wf_name') in selfapi_used,
                      'scheduled': iid in sched_all,
                      'refs': refs_elsewhere(iid, v, quoted)})
-    # roots = exposed endpoints + workflows scheduled from client side
-    roots = {r['inner_id'] for r in rows if r['expose']} | (sched_client & apievent_ids)
+    # roots = exposed endpoints + workflows scheduled from client side + self-API-called workflows
+    roots = ({r['inner_id'] for r in rows if r['expose'] or r['self_api']}
+             | (sched_client & apievent_ids))
     reach, frontier = set(), set(roots)
     while frontier:
         nxt = set()
@@ -370,8 +382,9 @@ def analyze_backend(data, quoted):
     for r in rows:
         if r['expose']:
             exposed += 1
-        r['unused_hard'] = (not r['expose'] and not r['scheduled'] and r['refs'] <= 0)
-        r['unused_transitive'] = (not r['expose'] and r['inner_id'] not in reach and not r['unused_hard'])
+        r['unused_hard'] = (not r['expose'] and not r['self_api'] and not r['scheduled'] and r['refs'] <= 0)
+        r['unused_transitive'] = (not r['expose'] and not r['self_api']
+                                  and r['inner_id'] not in reach and not r['unused_hard'])
     return rows, exposed
 
 def analyze_optionsets(data, content_raw):
@@ -588,10 +601,24 @@ def analyze_api_calls(data):
     on an element data source (data call) or a workflow action (action call). A call is unused if
     that type appears nowhere in the app logic. OAuth `token_call` / `oauth_user_data_call` calls
     are invoked automatically by the auth flow (not via that type) — treat them as used.
+
+    Also detects SELF-API calls — the app calling its own Workflow API (URL ending in
+    `/wf/<wf_name>` or `<placeholder>]/<wf_name>` where <wf_name> is a backend APIEvent's name).
+    Used self-calls are real references to those backend workflows (returned in `self_used`);
+    unused ones are annotated with `self_wf` so the report can pair call and workflow.
     """
     ac = (data.get('settings', {}).get('client_safe', {}) or {}).get('apiconnector2', {}) or {}
     applogic = json.dumps({k: data.get(k) for k in ('pages', 'element_definitions', 'api')}, separators=(',', ':'))
-    total, unused, providers = 0, [], set()
+    backend_wf_names = {(v.get('properties') or {}).get('wf_name')
+                        for v in (data.get('api') or {}).values()
+                        if isinstance(v, dict) and v.get('type') == 'APIEvent'} - {None}
+    def selfapi_target(url):
+        if not isinstance(url, str):
+            return None
+        m = re.search(r'/wf/([A-Za-z0-9_\-]+)\s*$', url) or re.search(r'\]/([A-Za-z0-9_\-]+)\s*$', url)
+        name = m.group(1) if m else None
+        return name if name in backend_wf_names else None
+    total, unused, providers, self_used = 0, [], set(), {}
     for apiid, api in ac.items():
         if not isinstance(api, dict):
             continue
@@ -613,12 +640,16 @@ def analyze_api_calls(data):
             ref = apiid + '.' + callid
             invoked = ('apiconnector2-' + ref) in applogic
             is_auth = callid in auth_calls or 'token' in (call.get('name') or '').lower()
+            self_wf = selfapi_target(call.get('url'))
             if invoked or is_auth:
+                if self_wf:
+                    self_used.setdefault(self_wf, []).append(ref)
                 continue
             unused.append({'provider': human, 'call': call.get('name') or callid, 'ref': ref,
-                           'method': (call.get('method') or '').upper()})
+                           'method': (call.get('method') or '').upper(), 'self_wf': self_wf})
     unused.sort(key=lambda r: ((r['provider'] or '').lower(), (r['call'] or '').lower()))
-    return {'total': total, 'used': total - len(unused), 'providers': len(providers), 'unused': unused}
+    return {'total': total, 'used': total - len(unused), 'providers': len(providers), 'unused': unused,
+            'self_used': self_used}
 
 def analyze_workflows(data):
     """Custom events never triggered, and page/reusable workflows whose trigger can't fire.
@@ -986,7 +1017,7 @@ STR = {
   'th_twin': 'Gêmeo em uso (ID)', 'twin_in_use': 'em uso',
   'dup_reuse_t': '2b · Nome duplicado — VERIFICAR antes de excluir',
   'dup_reuse_b': '<strong>Não exclua às cegas.</strong> Estes reutilizáveis não são inseridos em lugar nenhum, MAS existe outro reutilizável com o <strong>nome idêntico</strong> que está em uso (coluna “Gêmeo em uso”). A busca do Bubble é por NOME, então ela mostra os usos do gêmeo sob este elemento — fazendo-o parecer usado. Confirme pelo <strong>ID</strong> qual você vai excluir; provavelmente este aqui é uma cópia órfã, mas verifique.',
-  'back_body': 'API workflows (tipo <code>APIEvent</code>). Um <code>APIEvent</code> não exposto só roda se for agendado internamente (<code>Schedule API workflow</code>). Os “diretos” não estão expostos e o ID não aparece em nenhum agendamento — não há como executá-los hoje.',
+  'back_body': 'API workflows (tipo <code>APIEvent</code>). Um <code>APIEvent</code> não exposto só roda se for agendado internamente (<code>Schedule API workflow</code>). Os “diretos” não estão expostos e o ID não aparece em nenhum agendamento — não há como executá-los hoje. <strong>Exposição:</strong> workflows sem a chave <code>expose</code> no export são tratados como <strong>expostos</strong> (default do Bubble; o export só grava <code>expose: false</code> quando a caixa é desmarcada). Workflows chamados pelo próprio app via <strong>API Connector</strong> (self-call para <code>/wf/&lt;nome&gt;</code>) também contam como usados.',
   'exposed': 'expostos como endpoint público', 'direct': 'Inalcançáveis (diretos)', 'trans': 'Mortos transitivos',
   'opt_body': 'A expressão canônica <code>option.&lt;nome&gt;</code> não aparece em nenhum elemento, campo, workflow ou condição.',
   'plug_used': 'têm elementos, ações ou chamadas de API em uso.',
@@ -1018,6 +1049,7 @@ STR = {
   'c_api': 'Endpoints de API sem uso',
   'th_provider': 'API (provider)', 'th_endpoint': 'Endpoint (call)', 'th_method': 'Método',
   'api_none': 'Todas as chamadas de API declaradas são usadas.', 'filter_api': 'filtrar por API / endpoint…',
+  'api_self': '→ workflow interno:',
   'nv_g': 'Removidos', 'c_ghost': 'Refs a plugins removidos',
   's_ghost': '10 · Plugins removidos ainda referenciados (referências quebradas)',
   'q_ghost': 'Quais plugins foram removidos do projeto mas ainda têm elementos/ações que os referenciam?',
@@ -1103,7 +1135,7 @@ STR = {
   'th_twin': 'Used twin (ID)', 'twin_in_use': 'in use',
   'dup_reuse_t': '2b · Duplicate name — VERIFY before deleting',
   'dup_reuse_b': '<strong>Do not delete blindly.</strong> These reusables are placed nowhere, BUT another reusable with the <strong>exact same name</strong> IS in use (see “Used twin”). Bubble\'s search matches by NAME, so it shows the twin\'s usages under this element — making it look used. Confirm by <strong>ID</strong> which one you delete; this one is likely an orphaned copy, but verify.',
-  'back_body': 'API workflows (type <code>APIEvent</code>). A non-exposed <code>APIEvent</code> can only run if scheduled internally (<code>Schedule API workflow</code>). The “direct” ones are not exposed and their id appears in no scheduling action — they cannot run today.',
+  'back_body': 'API workflows (type <code>APIEvent</code>). A non-exposed <code>APIEvent</code> can only run if scheduled internally (<code>Schedule API workflow</code>). The “direct” ones are not exposed and their id appears in no scheduling action — they cannot run today. <strong>Exposure:</strong> workflows with no <code>expose</code> key in the export are treated as <strong>exposed</strong> (Bubble default; the export only writes <code>expose: false</code> when the box is unchecked). Workflows the app calls on itself via the <strong>API Connector</strong> (self-call to <code>/wf/&lt;name&gt;</code>) also count as used.',
   'exposed': 'exposed as a public endpoint', 'direct': 'Unreachable (direct)', 'trans': 'Transitively dead',
   'opt_body': 'The canonical expression <code>option.&lt;name&gt;</code> appears in no element, field, workflow or condition.',
   'plug_used': 'have elements, actions or API calls in use.',
@@ -1135,6 +1167,7 @@ STR = {
   'c_api': 'Unused API endpoints',
   'th_provider': 'API (provider)', 'th_endpoint': 'Endpoint (call)', 'th_method': 'Method',
   'api_none': 'All declared API calls are used.', 'filter_api': 'filter by API / endpoint…',
+  'api_self': '→ internal workflow:',
   'nv_g': 'Removed', 'c_ghost': 'Refs to removed plugins',
   's_ghost': '10 · Removed plugins still referenced (broken references)',
   'q_ghost': 'Which plugins were removed from the project but still have elements/actions referencing them?',
@@ -1421,8 +1454,9 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
 
     # ---- API Connector calls (section 9) ----
     apc = apicalls or {'total': 0, 'used': 0, 'providers': 0, 'unused': []}
-    api_rows = ''.join(f"<tr><td class='mono'>{esc(r['provider'])}</td><td>{esc(r['call'])}</td>"
-                       f"<td><span class='tag'>{esc(r['method'])}</span></td><td class='mono dim'>{esc(r['ref'])}</td>"
+    api_rows = ''.join(f"<tr><td class='mono'>{esc(r['provider'])}</td><td>{esc(r['call'])}"
+                       + (f" <span class='tag'>{T['api_self']} {esc(r['self_wf'])}</span>" if r.get('self_wf') else '')
+                       + f"</td><td><span class='tag'>{esc(r['method'])}</span></td><td class='mono dim'>{esc(r['ref'])}</td>"
                        f"{chk('apicall:' + str(r['ref']), (r['provider'] or '') + ' › ' + (r['call'] or ''))}</tr>"
                        for r in apc['unused'])
     api_tbl = (f"<div class=\"filter\"><input id=\"af\" placeholder=\"{T['filter_api']}\" oninput=\"fa()\"></div>"
@@ -1668,7 +1702,8 @@ def main():
     log('url/script corpus:', len(url_corpus), 'chars; app domains:', domains)
     pages, dyn = analyze_pages(data, quoted, url_corpus, domains)
     reuse = analyze_reusables(data, quoted)
-    backend, exposed = analyze_backend(data, quoted)
+    apicalls = analyze_api_calls(data)
+    backend, exposed = analyze_backend(data, quoted, selfapi_used=set(apicalls['self_used']))
     opt = analyze_optionsets(data, content_raw)
     sty = analyze_styles(data, content_raw)
     variables = analyze_variables(data, content_raw)
@@ -1678,7 +1713,6 @@ def main():
     script_corpus = build_script_corpus(data)
     dt = analyze_datatypes(data, quoted, content_raw, script_corpus)
     wfaudit = analyze_workflows(data)
-    apicalls = analyze_api_calls(data)
     ghosts = analyze_ghost_plugins(data, plug_registry)
 
     page_audit = {}
