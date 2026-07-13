@@ -210,7 +210,10 @@ def inv_api_connector(data, content_raw):
         for cid, call in (prov.get('calls') or {}).items():
             if not isinstance(call, dict):
                 continue
-            ref = 'apiconnector2-%s.%s' % (aid, cid)
+            # a call is invoked as a workflow ACTION (hyphen form) or as a DATA SOURCE
+            # (dot form, `"provider":"apiconnector2.<aid>.<cid>"`) — same rule as bubble_audit.py
+            ref_action = '"apiconnector2-%s.%s"' % (aid, cid)
+            ref_data = '"apiconnector2.%s.%s"' % (aid, cid)
             params = []
             for pgroup in ('url_params', 'body_params', 'headers'):
                 pg = call.get(pgroup)
@@ -226,7 +229,7 @@ def inv_api_connector(data, content_raw):
                           'body_template': mask_body(call.get('body')),
                           'params': params,
                           'initialized': bool(call.get('initialized')),
-                          'used': content_raw.count('"' + ref + '"') > 0})
+                          'used': ref_action in content_raw or ref_data in content_raw})
         calls.sort(key=lambda c: (c['name'] or '').lower())
         providers.append({'id': aid, 'name': prov.get('human'), 'auth': auth_info,
                           'call_count': len(calls),
