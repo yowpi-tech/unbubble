@@ -35,6 +35,15 @@ next to them.
 
 ## Workflow
 
+### 0 · Gate: resolve open questions with the user FIRST
+
+Read `docs/08-open-questions.md` before anything else. If any question that affects security,
+architecture, data model or migration is still unanswered, ASK THE USER NOW (AskUserQuestion tool
+when available, batches of up to 4 with concrete options + free-text; otherwise ask in chat) and
+record the answers in 08 as dated owner decisions ("Decisões do dono (YYYY-MM-DD)"). Do not design
+around an unanswered blocking question — an assessment built on guesses produces a rebuild pack
+the owner has to redo.
+
 ### 1 · Assess the as-is system
 
 Read `references/assessment-checklist.md` and score the current system against it. Ground every
@@ -70,6 +79,10 @@ Deliver `TARGET-ARCHITECTURE.md`:
   accessibility and responsiveness baseline.
 - Integration map: every external API/plugin-service from the clone docs → how the new system
   talks to it (direct SDK, webhook, queue) and which credentials must be re-issued.
+- **Plugin translation policy (standing owner decision):** plugins that provide FRONTEND
+  functionality (editors, toasts, icons, masks/validation, QR rendering, JS utils…) are rebuilt
+  as **native code** in the new stack — turn each one (from `03-plugins.md`) into a build task;
+  only EXTERNAL-SERVICE integrations get a keep/replace/SaaS evaluation here.
 
 ### 3 · Redesign the data model
 

@@ -107,6 +107,31 @@ docs/
                             anything requiring the owner's confirmation
 ```
 
+### 3b · Resolve open questions WITH the user (blocking gate — do NOT skip)
+
+`08-open-questions.md` is not a parking lot: it is a question list for the owner. BEFORE writing
+the PRD, ask the user every owner-blocking question you collected (use the AskUserQuestion tool
+when available — batches of up to 4 questions with concrete options plus free-text "Other";
+otherwise ask in chat). Then:
+
+- Record each answer in `08-open-questions.md` under a dated **"Decisões do dono (YYYY-MM-DD)"**
+  section — decisions are binding for the PRD.
+- Propagate the answers into the affected docs (01–07) at the exact spots, citing the decision
+  date, and adjust the PRD scope accordingly (descoped endpoints, authorized deviations, etc.).
+- Only questions the user genuinely cannot answer now stay open — say so explicitly in 08 and in
+  the PRD's out-of-scope section.
+- Never deliver a PRD with silently unresolved blocking questions.
+
+### Plugin policy (encode it in 03-plugins.md)
+
+Classify every installed plugin as one of:
+
+- **Frontend functionality** (rich-text editors, toasts, pickers, icons, masks/validations,
+  QR/barcode rendering, JS utilities…) — in the rebuild these are **replaced by own code**.
+  Document the observable behavior to reproduce; never propose "an equivalent plugin".
+- **External-service integration** (talks to an outside API and/or holds credentials) — document
+  the service and key NAMES; the keep × replace decision belongs to level-up's integration map.
+
 ### 4 · Generate the clone PRD
 
 Write `<workdir>/PRD-clone.md`. This is the **first PRD** — recreate the system as-is on a new
