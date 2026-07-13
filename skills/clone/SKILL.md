@@ -122,6 +122,13 @@ otherwise ask in chat). Then:
   the PRD's out-of-scope section.
 - Never deliver a PRD with silently unresolved blocking questions.
 
+Classic blocking questions worth hunting for proactively: integrations **gated by a config flag
+whose runtime value lives in the DATABASE** (the export shows the code path but cannot tell if it
+is live — trace the flag, then ask the owner "is it on in production?"; a dormant route can
+remove whole integrations and endpoints from the parity contract), endpoints kept only for
+testing, external consumers not visible in the export (API tokens), and where any
+"encryption"/token logic actually runs.
+
 ### Plugin policy (encode it in 03-plugins.md)
 
 Classify every installed plugin as one of:
