@@ -76,13 +76,39 @@ Deliver `TARGET-ARCHITECTURE.md`:
   recurring/DB-trigger events, input validation at the boundary, automated tests on the
   BR-xxx business rules, observability (structured logs, error tracking, metrics).
 - **UX/UI plan** (priority 2): design system choice, which flows are kept as-is vs redesigned,
-  accessibility and responsiveness baseline.
+  accessibility and responsiveness baseline. Two recurring UX translations worth calling out:
+  **theme (light/dark)** is CSS + client state (custom properties / `prefers-color-scheme`), never
+  a DB enum/column — drop the Bubble theme option set and per-user theme field; and a **WYSIWYG
+  HTML editor** is a candidate to become a **Markdown WYSIWYG** (e.g. Milkdown) when the owner
+  wants Markdown as the canonical content — if so, plan the HTML→Markdown conversion in the
+  migration (archive the original HTML) and render Markdown→HTML server-side for any PDF pipeline.
 - Integration map: every external API/plugin-service from the clone docs → how the new system
   talks to it (direct SDK, webhook, queue) and which credentials must be re-issued.
 - **Plugin translation policy (standing owner decision):** plugins that provide FRONTEND
   functionality (editors, toasts, icons, masks/validation, QR rendering, JS utils…) are rebuilt
   as **native code** in the new stack — turn each one (from `03-plugins.md`) into a build task;
   only EXTERNAL-SERVICE integrations get a keep/replace/SaaS evaluation here.
+
+### 2b · Frontend design brief for Claude Design
+
+Deliver `FRONTEND-DESIGN.md` — a self-contained brief the owner runs through **Claude Design**
+BEFORE any UI implementation starts. It must contain:
+
+- **Design tokens extracted from the actual export** (not invented): the real color palette
+  (`settings.client_safe.color_tokens_user`, ranked by usage in the raw export), the fonts in use,
+  and neutrals — mapped to CSS-variable token names with a light/dark note and an accessibility
+  caveat (flag brand colors that fail AA on text).
+- **Design principles** tied to what the app IS (a dense work tool vs a marketing site, the tone
+  the domain needs).
+- **Component inventory** (design-system pieces) and a **screen inventory** ranked by priority
+  using `pages.json` element/workflow counts.
+- **Ready-to-paste prompts** for Claude Design: one for the system/tokens, then one per P0 screen.
+- A handoff note: approved tokens → `tailwind.config` + CSS vars, components → shadcn/ui, feeding
+  the design story in BACKLOG. The brief changes presentation only — never BR-xxx rules or the
+  data model.
+
+Extract the palette/fonts with a small script over the `.bubble` (never hand-wave the tokens);
+put the color anchors and font names in the doc so Claude Design has real brand input.
 
 ### 3 · Redesign the data model
 
@@ -118,6 +144,8 @@ kept read-only as archive).
 levelup/
   ASSESSMENT.md            scorecard, tech-debt register, security findings, keepers
   TARGET-ARCHITECTURE.md   stack decision, security & reliability architecture, UX plan
+  FRONTEND-DESIGN.md       design brief for Claude Design: tokens from the export, screen
+                           inventory, ready-to-paste prompts (run BEFORE UI implementation)
   DATA-MODEL.md            new schema + old→new mapping table
   MIGRATION-PLAN.md        per-table mechanism, cutover runbook, validation
   PRD-v2.md                PRD-clone rewritten for the new platform: parity requirements
@@ -140,3 +168,5 @@ every decision recorded with its why, every requirement testable.
   it is written down in RISKS.md with the user's explicit sign-off required.
 - The migration plan accounts for **every** table and file field in DATA-MODEL.md's mapping.
 - PRD-v2 keeps full traceability to BR-xxx rules so parity is verifiable after the rebuild.
+- FRONTEND-DESIGN.md uses tokens **extracted from the export**, not invented, and is written to be
+  run through Claude Design before UI work starts.
