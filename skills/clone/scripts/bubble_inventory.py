@@ -295,7 +295,9 @@ def inv_backend(data):
         item = {'key': k, 'id': v.get('id'), 'kind': v.get('type'),
                 'name': p.get('wf_name') or p.get('event_name'),
                 'folder': fname.get(p.get('wf_folder'), p.get('wf_folder')),
-                'expose': bool(p.get('expose')),
+                # Bubble only serializes expose:false when the checkbox is UNchecked —
+                # an APIEvent with no expose key IS exposed (same rule as bubble_audit.py)
+                'expose': (v.get('type') == 'APIEvent' and 'expose' not in p) or bool(p.get('expose')),
                 'method': p.get('trigger_option'),
                 'auth_not_required': bool(p.get('auth_unecessary')),
                 'ignore_privacy_rules': bool(p.get('ignore_privacy_rules')),
