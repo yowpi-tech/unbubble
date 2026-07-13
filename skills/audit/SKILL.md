@@ -31,6 +31,23 @@ description: >
 > **`unbubble:level-up`** (step 3: re-architecture + data-migration plan). After delivering the
 > audit report, tell the user this next step exists.
 
+## Project folder (all pipeline steps write here)
+
+Every UnBubble project gets ONE folder: **`~/UnBubble-Projects/<app-id>/`** (app id = the app's
+`_id` in the export, e.g. `my-app`). Create it on first contact and put ALL generated
+artifacts there — never scatter outputs in Downloads or the skill repo:
+
+```
+~/UnBubble-Projects/<app>/
+  audit/       one report per round: <app>-vN_unused_report.html (+ _audit.json, progress .md)
+  inventory/   bubble_inventory.py output            (step 2 · clone)
+  docs/        as-is docs + PRD-clone.md             (step 2 · clone)
+  levelup/     rebuild pack                          (step 3 · level-up)
+```
+
+The `.bubble` exports themselves may stay where the user keeps them (they're large); reference
+their paths in the docs instead of copying.
+
 ## What this does and why it's hard
 
 A Bubble app export (`.bubble`) is one giant single-line JSON — often 50–150 MB. There is no
@@ -88,8 +105,9 @@ on a 100 MB file. It never modifies the export.
 
 1. **Locate the export.** Ask for the `.bubble` file path if not given. These are usually in
    Downloads. They're large — never `cat`/read the whole file into context; the script streams it.
-2. **Run the script** with `--out` pointing somewhere sensible (next to the export, or the
-   project). Pass `--lang pt` for a Portuguese report if the user works in Portuguese.
+2. **Run the script** with `--out` pointing into the project folder:
+   `~/UnBubble-Projects/<app>/audit/<app>-vN_unused_report.html` (N = audit round; create the
+   folder if missing). Pass `--lang pt` for a Portuguese report if the user works in Portuguese.
 3. **Read the stdout summary** and relay the headline counts to the user, then point them at the
    HTML report file. Lead with the high-confidence categories (backend workflows, option sets,
    reusables, styles) and frame pages carefully (see caveats).

@@ -23,6 +23,10 @@ description: >
 inventory JSONs for spot-checks. Output: a **rebuild pack** an AI (or team) can execute to
 recreate the system on a new platform with an engineering upgrade.
 
+All inputs and outputs live in the project folder `~/UnBubble-Projects/<app-id>/` (shared by
+the whole pipeline): read `docs/` + `PRD-clone.md` from there and write the `levelup/` pack
+next to them.
+
 **Priorities, in order — never trade down:**
 1. **Information security** and **reliability of results** (the system must be trustworthy:
    correct numbers, no data leaks, no silent failures).

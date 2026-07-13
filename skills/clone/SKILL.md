@@ -29,6 +29,10 @@ PRD to recreate it **as a functional clone** (feature parity). Do NOT redesign, 
 criticize the architecture here — that is `level-up`'s job. Record smells you notice in
 `08-open-questions.md` as notes for step 3 instead.
 
+**`<workdir>` is the project folder** `~/UnBubble-Projects/<app-id>/` (same folder the audit
+uses; create it if this is the first step run for the app). Everything this skill emits lives
+there: `inventory/`, `docs/`, `PRD-clone.md`.
+
 ## Workflow
 
 ### 1 · Extract the inventory (deterministic)

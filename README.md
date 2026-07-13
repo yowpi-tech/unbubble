@@ -11,5 +11,9 @@ A 3-step pipeline to take an app **off Bubble.io** with an engineering upgrade.
 Each skill is standalone (own scripts/references), but they chain: audit → clean → re-export →
 clone → level-up → rebuild.
 
+All artifacts of a given app live in **one project folder** — `~/UnBubble-Projects/<app-id>/`
+(`audit/`, `inventory/`, `docs/` + `PRD-clone.md`, `levelup/`) — created by whichever skill
+touches the app first. Project inputs (spreadsheets, exports) never go into this repo.
+
 Scripts are dependency-free Python 3.8+ (stdlib only). The canonical `.bubble` export reference
 model lives in `skills/audit/references/reference-model.md`.
