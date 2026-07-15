@@ -268,7 +268,20 @@ def analyze_mobile_views(data):
     for bname, vid in (cs.get('built_in_mobile_views') or {}).items():
         if isinstance(vid, str):
             roles.setdefault(vid, bname)
+    # Two reference forms: MobileNavigate (properties.element_id) and DeepLink
+    # (properties.destination_view — push notifications / magic links landing on a view).
+    # DeepLink lives in BACKEND workflows too, so the api section must be scanned as well.
     targets, nav_edges = Counter(), []
+    def collect_navs(actions, cname, kind, disabled):
+        navs = []
+        walk(actions, lambda n: navs.append(n) if n.get('type') in ('MobileNavigate', 'DeepLink') else None)
+        for n in navs:
+            p = n.get('properties') or {}
+            tid = p.get('element_id') if n.get('type') == 'MobileNavigate' else p.get('destination_view')
+            if isinstance(tid, str):
+                targets[tid] += 1
+                nav_edges.append({'target': tid, 'container': cname, 'kind': kind,
+                                  'action': n.get('type'), 'disabled': disabled})
     for kind, coll in (('mobile', data.get('mobile_views', {})), ('page', data.get('pages', {})),
                        ('reusable', data.get('element_definitions', {}))):
         if not isinstance(coll, dict):
@@ -280,15 +293,12 @@ def analyze_mobile_views(data):
             for wf in v['workflows'].values():
                 if not isinstance(wf, dict):
                     continue
-                disabled = bool((wf.get('properties') or {}).get('workflow_disabled'))
-                navs = []
-                walk(wf.get('actions'), lambda n: navs.append(n) if n.get('type') == 'MobileNavigate' else None)
-                for n in navs:
-                    tid = (n.get('properties') or {}).get('element_id')
-                    if isinstance(tid, str):
-                        targets[tid] += 1
-                        nav_edges.append({'target': tid, 'container': cname, 'kind': kind,
-                                          'disabled': disabled})
+                collect_navs(wf.get('actions'), cname, kind,
+                             bool((wf.get('properties') or {}).get('workflow_disabled')))
+    for v in (data.get('api') or {}).values():
+        if isinstance(v, dict):
+            collect_navs(v.get('actions'), (v.get('properties') or {}).get('wf_name') or v.get('id') or '',
+                         'backend', False)
     ids = {v.get('id') for v in views.values()}
     oldish = re.compile(r'(_old|_bkp|_backup|_copy|_test|_v\d|_deprecated|_delete|❌|old_|test_'
                         r'|copy_| copy|_bak|_legacy|clone|\bbkp\b)', re.I)
@@ -1643,7 +1653,7 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
     # ---- workflow audit (section 8 + backend 3b) ----
     wf = wfaudit or {'backend_ce': [], 'page_ce': [], 'orphan': [], 'hidden': []}
     def kindtag(k):
-        lbl = {'page': T['wf_kp'], 'reusable': T['wf_kr'], 'mobile': T['wf_km']}.get(k, T['wf_kr'])
+        lbl = {'page': T['wf_kp'], 'reusable': T['wf_kr'], 'mobile': T['wf_km'], 'backend': 'backend'}.get(k, T['wf_kr'])
         return f"<span class='tag'>{lbl}</span>"
     wf_bce_tbl = ''.join(f"<tr><td class='mono'>{esc(r['name'])}</td><td class='mono dim'>{esc(r['id'])}</td>"
                          f"{chk('customevent:' + str(r['id']), r['name'])}</tr>" for r in wf['backend_ce'])
