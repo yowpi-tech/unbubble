@@ -238,7 +238,8 @@ def inv_api_connector(data, content_raw):
     providers.sort(key=lambda p: (p['name'] or '').lower())
     return providers
 
-def inv_plugins(data, content_raw, names):
+def inv_plugins(data, content_raw, names, authors=None):
+    authors = authors or {}
     cs = (data.get('settings') or {}).get('client_safe') or {}
     secure_keys = sorted(((data.get('settings') or {}).get('secure') or {}).keys())
     installed = cs.get('plugins') or {}
@@ -249,6 +250,7 @@ def inv_plugins(data, content_raw, names):
         sec = [k for k in secure_keys if k.startswith(pid + '_') or k.startswith(pid)]
         out.append({'id': pid, 'version': ver,
                     'name': names.get(pid),
+                    'author': authors.get(pid),
                     'marketplace_url': 'https://bubble.io/plugin/' + pid if re.match(r'^\d{13}x', pid) else None,
                     'usage_type_refs': usage,
                     'config_key_names': cfg,          # names only — values live in the app
@@ -459,10 +461,20 @@ def main():
 
     names_path = args.plugin_names or os.path.join(
         os.path.dirname(os.path.abspath(__file__)), '..', '..', 'audit', 'references', 'plugin_names.json')
-    names = {}
+    names, authors = {}, {}
     if os.path.exists(names_path):
         try:
-            names = {k: v for k, v in json.load(open(names_path)).items() if v}
+            for k, v in json.load(open(names_path)).items():
+                if k.startswith('_') or not v:
+                    continue
+                # registry value forms: "Name" | null | {"name":..., "author":..., "delisted":...}
+                if isinstance(v, dict):
+                    if v.get('name'):
+                        names[k] = v['name']
+                    if v.get('author'):
+                        authors[k] = v['author']
+                else:
+                    names[k] = v
         except Exception as e:
             log('  (plugin names not loaded: %s)' % e)
 
@@ -472,7 +484,7 @@ def main():
     db = inv_database(data)
     osets = inv_option_sets(data)
     ac = inv_api_connector(data, content_raw)
-    plugins = inv_plugins(data, content_raw, names)
+    plugins = inv_plugins(data, content_raw, names, authors)
     dapi = inv_data_api(data, db)
     backend = inv_backend(data)
     pages = inv_pages(data, def_names, names)
