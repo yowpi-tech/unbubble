@@ -200,7 +200,7 @@ def build_script_corpus(data):
         elif isinstance(o, list):
             for v in o:
                 rec(v)
-    rec({k: data.get(k) for k in ('pages', 'element_definitions', 'api')})
+    rec({k: data.get(k) for k in ('pages', 'element_definitions', 'api', 'mobile_views')})
     return '\n'.join(parts)
 
 # ------------------------------------------------------------------ analyses
@@ -244,8 +244,67 @@ def analyze_pages(data, quoted, url_corpus, domains):
             dyn['dynamic_page_name'] += 1
         if t == 'ListGoToPage':
             dyn['ListGoToPage'] += 1
-    walk({k: data.get(k) for k in ('pages', 'element_definitions')}, cnt)
+    walk({k: data.get(k) for k in ('pages', 'element_definitions', 'mobile_views')}, cnt)
     return rows, dyn
+
+def analyze_mobile_views(data):
+    """Native-app mobile views (`mobile_views`, type=Page + is_mobile_view).
+
+    A view is reachable ONLY via: settings.client_safe.initial_mobile_view, a built-in system
+    role (settings.client_safe.built_in_mobile_views: update_app, reset_password, ...) or a
+    MobileNavigate action whose properties.element_id is the view's inner id. There is no public
+    URL for a view, so this is closed-world — but deep links / push notifications may open views
+    directly, hence "verify" phrasing in the report. NB: do NOT count quoted-id occurrences here:
+    elements of views created by cloning keep `current_parent` pointing at the source view's id,
+    which massively inflates naive counts (a cloned view can carry many such refs).
+    Also detects BROKEN navigations: MobileNavigate whose target id matches no existing view
+    (the view was deleted; the action silently fails at runtime).
+    """
+    views = {k: v for k, v in (data.get('mobile_views') or {}).items() if isinstance(v, dict)}
+    cs = (data.get('settings', {}) or {}).get('client_safe', {}) or {}
+    roles = {}
+    if isinstance(cs.get('initial_mobile_view'), str):
+        roles[cs['initial_mobile_view']] = 'initial'
+    for bname, vid in (cs.get('built_in_mobile_views') or {}).items():
+        if isinstance(vid, str):
+            roles.setdefault(vid, bname)
+    targets, nav_edges = Counter(), []
+    for kind, coll in (('mobile', data.get('mobile_views', {})), ('page', data.get('pages', {})),
+                       ('reusable', data.get('element_definitions', {}))):
+        if not isinstance(coll, dict):
+            continue
+        for v in coll.values():
+            if not isinstance(v, dict) or not isinstance(v.get('workflows'), dict):
+                continue
+            cname = v.get('name') or ''
+            for wf in v['workflows'].values():
+                if not isinstance(wf, dict):
+                    continue
+                disabled = bool((wf.get('properties') or {}).get('workflow_disabled'))
+                navs = []
+                walk(wf.get('actions'), lambda n: navs.append(n) if n.get('type') == 'MobileNavigate' else None)
+                for n in navs:
+                    tid = (n.get('properties') or {}).get('element_id')
+                    if isinstance(tid, str):
+                        targets[tid] += 1
+                        nav_edges.append({'target': tid, 'container': cname, 'kind': kind,
+                                          'disabled': disabled})
+    ids = {v.get('id') for v in views.values()}
+    oldish = re.compile(r'(_old|_bkp|_backup|_copy|_test|_v\d|_deprecated|_delete|❌|old_|test_'
+                        r'|copy_| copy|_bak|_legacy|clone|\bbkp\b)', re.I)
+    rows = []
+    for wk, v in views.items():
+        iid, name = v.get('id'), v.get('name')
+        rows.append({'wrapper': wk, 'inner_id': iid, 'name': name,
+                     'nav_refs': targets.get(iid, 0), 'role': roles.get(iid),
+                     'name_flag_old': bool(oldish.search(name or '')),
+                     'workflows': len(v.get('workflows') or {}),
+                     'elements': len(v.get('elements') or {}),
+                     'unused': (targets.get(iid, 0) == 0 and roles.get(iid) is None)})
+    rows.sort(key=lambda r: ((r['name'] or '').lower(), r['inner_id'] or ''))
+    broken = [e for e in nav_edges if e['target'] not in ids]
+    return {'total': len(rows), 'rows': rows, 'unused': [r for r in rows if r['unused']],
+            'roles': {vid: rname for vid, rname in roles.items()}, 'broken': broken}
 
 def analyze_reusables(data, quoted):
     defs = data.get('element_definitions', {})
@@ -283,6 +342,11 @@ def analyze_reusables(data, quoted):
     for c, cids in edges.items():
         if c.startswith('PAGE') or c.startswith('MOBILE'):
             roots |= cids
+    # settings-pinned mobile reusables (built_in_mobile_reusables, e.g. offline_banner) are shown
+    # by the NATIVE RUNTIME itself — roots even if never placed as a CustomElement anywhere.
+    cs_mob = (data.get('settings', {}).get('client_safe', {}) or {}).get('built_in_mobile_reusables') or {}
+    builtin_reuse = {vid for vid in cs_mob.values() if isinstance(vid, str)}
+    roots |= (builtin_reuse & set(iid2wrapper))
     reachable, frontier = set(), set(roots)
     while frontier:
         nxt = set()
@@ -306,7 +370,7 @@ def analyze_reusables(data, quoted):
         iid = m['inner_id']
         r = refs_elsewhere(iid, defs[wk], quoted)
         placed = iid in all_placed
-        hard = (not placed and r <= 0)
+        hard = (not placed and r <= 0 and iid not in builtin_reuse)
         trans = (placed and iid not in reachable)
         twins = [t for t in name_to_iids.get(m['name'], []) if t != iid]
         twin_used_id = next((t for t in twins if t in reachable), None)
@@ -354,6 +418,12 @@ def analyze_backend(data, quoted, selfapi_used=None):
         if isinstance(dv, dict):
             walk(dv.get('elements'), lambda n: grab(n, sched_client))
             walk(dv.get('workflows'), lambda n: grab(n, sched_client))
+    # native mobile views schedule/trigger backend work too — without this, a WF scheduled ONLY
+    # from a mobile view is missing from the reachability ROOTS and gets falsely flagged transitive
+    for mvv in data.get('mobile_views', {}).values():
+        if isinstance(mvv, dict):
+            walk(mvv.get('elements'), lambda n: grab(n, sched_client))
+            walk(mvv.get('workflows'), lambda n: grab(n, sched_client))
     # per-workflow scheduling/trigger edges over ALL backend nodes (for transitive reachability).
     # The graph must include every `api` entry — APIEvent, CustomEvent, DatabaseTriggerEvent,
     # RecurringEvent — because chains like "DB trigger schedules an APIEvent" or "page triggers a
@@ -381,6 +451,11 @@ def analyze_backend(data, quoted, selfapi_used=None):
                      'folder': folders.get(p.get('wf_folder'), '(no folder)'),
                      'expose': bool(p.get('expose', wf_api_on)),
                      'expose_explicit': 'expose' in p,
+                     # webhook signature: "Parameter definition = Detect request data" is stored as
+                     # parameter_def == 'auto'; raw_data is the sample payload captured when the
+                     # endpoint was initialized by a real external call (e.g. a payment-provider webhook)
+                     'webhook': p.get('parameter_def') == 'auto',
+                     'webhook_initialized': bool(p.get('raw_data')),
                      'self_api': p.get('wf_name') in selfapi_used,
                      'scheduled': iid in sched_all,
                      'refs': refs_elsewhere(iid, v, quoted)})
@@ -404,6 +479,11 @@ def analyze_backend(data, quoted, selfapi_used=None):
         r['unused_hard'] = (not r['expose'] and not r['self_api'] and not r['scheduled'] and r['refs'] <= 0)
         r['unused_transitive'] = (not r['expose'] and not r['self_api']
                                   and r['inner_id'] not in reach and not r['unused_hard'])
+        # A webhook-shaped WF (Detect request data) that looks unreachable is NOT a safe delete:
+        # its caller is an external service, invisible to static analysis. Route to a verify bucket.
+        r['webhook_verify'] = r['webhook'] and (r['unused_hard'] or r['unused_transitive'])
+        if r['webhook_verify']:
+            r['unused_hard'] = r['unused_transitive'] = False
     return rows, exposed
 
 def analyze_optionsets(data, content_raw):
@@ -719,7 +799,7 @@ def analyze_workflows(data):
         elif isinstance(o, list):
             for v in o:
                 collect_shown(v)
-    collect_shown({k: data.get(k) for k in ('pages', 'element_definitions')})
+    collect_shown({k: data.get(k) for k in ('pages', 'element_definitions', 'mobile_views')})
     def_names = build_def_names(data)  # for editor labels of reusable instances
 
     def elem_maps(container):
@@ -778,6 +858,30 @@ def analyze_workflows(data):
             return iid
         return name, canvis, never_rendered, blocking
 
+    # Global element-id -> home container index. A trigger element missing from ITS OWN container
+    # may still exist elsewhere: Bubble's "convert group to reusable" moves the elements into a new
+    # reusable definition but leaves container-level workflows behind, still bound to the old
+    # element_id. Those leftovers can never fire (the id is not in the container's tree), but
+    # reporting WHERE the element went makes the finding verifiable in the editor.
+    elem_home = {}
+    for hkind, hcoll in (('page', data.get('pages', {})), ('reusable', data.get('element_definitions', {})),
+                         ('mobile', data.get('mobile_views', {}))):
+        for hv in hcoll.values():
+            if not isinstance(hv, dict):
+                continue
+            hname = hv.get('name') or ''
+            stack = [hv.get('elements')]
+            while stack:
+                elements = stack.pop()
+                if not isinstance(elements, dict):
+                    continue
+                for el in elements.values():
+                    if isinstance(el, dict):
+                        hid = el.get('id')
+                        if hid and hid not in elem_home:
+                            elem_home[hid] = (hname, hkind)
+                        stack.append(el.get('elements'))
+
     backend_ce, page_ce, orphan, hidden = [], [], [], []
     # backend custom events
     for k, v in data.get('api', {}).items():
@@ -788,7 +892,8 @@ def analyze_workflows(data):
                 backend_ce.append({'id': iid, 'name': p.get('event_name') or p.get('wf_name') or iid,
                                    'folder': p.get('wf_folder')})
     # page/reusable workflows
-    for kind, coll in (('page', data.get('pages', {})), ('reusable', data.get('element_definitions', {}))):
+    for kind, coll in (('page', data.get('pages', {})), ('reusable', data.get('element_definitions', {})),
+                       ('mobile', data.get('mobile_views', {}))):
         for v in coll.values():
             if not isinstance(v, dict):
                 continue
@@ -812,7 +917,10 @@ def analyze_workflows(data):
                 if not eid:
                     continue  # lifecycle / non-element trigger (PageLoaded, LoggedIn, etc.) — can fire
                 if eid not in canvis:
-                    orphan.append({'id': wid, 'trigger': t, 'container': cname, 'kind': kind, 'element_id': eid})
+                    home = elem_home.get(eid)
+                    orphan.append({'id': wid, 'trigger': t, 'container': cname, 'kind': kind, 'element_id': eid,
+                                   'moved_to': home[0] if home else None,
+                                   'moved_to_kind': home[1] if home else None})
                 elif never_rendered(eid):
                     blk = blocking(eid)
                     hidden.append({'id': wid, 'trigger': t, 'container': cname, 'kind': kind,
@@ -861,10 +969,11 @@ def analyze_variables(data, content_raw):
     return {'colors': {'active': ca, 'deleted': cd, 'unused': rows(colors, 'color', 'rgba')},
             'fonts': {'active': fa, 'deleted': fd, 'unused': rows(fonts, 'font', 'font_family')}}
 
-# well-known short-name plugin labels (marketplace long-ids have no name in the export)
+# well-known short-name plugin labels (marketplace long-ids have no name in the export).
+# Short-name plugins are Bubble's own built-in/core plugins — author is Bubble.
 KNOWN_PLUGINS = {
     'ionic': 'Ionic elements', 'slack': 'Slack', 'google': 'Google (fonts/maps/OAuth)',
-    'chartjs': 'Chart.js', 'select2': 'Select / multi-dropdown', 'addtoany': 'AddToAny share',
+    'chartjs': 'Chart Element', 'select2': 'Select / multi-dropdown', 'addtoany': 'AddToAny share',
     'docusign': 'DocuSign', 'mailchimp': 'Mailchimp', 'selectPDF': 'SelectPDF', 'zapiernew': 'Zapier',
     'dbconnector': 'SQL Database Connector', 'draggableui': 'Draggable Elements', 'progressbar': 'Progress Bar',
     'appconnector': 'App Connector', 'fullcalendar': 'Full Calendar', 'apiconnector2': 'API Connector',
@@ -879,12 +988,14 @@ HEADLESS_PLUGINS = {
 }
 
 def load_plugin_registry(extra_path=None):
-    """Marketplace plugin-id -> {'name', 'delisted'}. Loads the bundled
+    """Marketplace plugin-id -> {'name', 'author', 'delisted'}. Loads the bundled
     references/plugin_names.json (IDs are marketplace-global, so it's reusable across projects)
     plus an optional override file. Accepted value forms in the JSON:
       "Name"                                  known, listed plugin
-      null                                    looked up but marketplace page gone (delisted, name unknown)
-      {"name": "Name", "delisted": true}      delisted but the name is known (e.g. from the app owner)
+      null                                    looked up but unavailable (delisted, name unknown)
+      {"name": ..., "author": ..., "delisted": true}   object form; author = seller display name
+    Authors resolve via the PUBLIC Data API chain: /api/1.1/obj/plugin/<id> -> owner_user ->
+    /obj/user/<id> -> organization -> /obj/organization/<id> name_text.
     """
     reg = {}
     here = os.path.dirname(os.path.abspath(__file__))
@@ -895,9 +1006,10 @@ def load_plugin_registry(extra_path=None):
                     if k.startswith('_'):
                         continue
                     if isinstance(v, dict):
-                        reg[k] = {'name': v.get('name'), 'delisted': bool(v.get('delisted'))}
+                        reg[k] = {'name': v.get('name'), 'author': v.get('author') or '',
+                                  'delisted': bool(v.get('delisted'))}
                     else:
-                        reg[k] = {'name': v, 'delisted': v is None}
+                        reg[k] = {'name': v, 'author': '', 'delisted': v is None}
             except Exception:
                 pass
     return reg
@@ -939,8 +1051,10 @@ def analyze_plugins(data, content_raw, registry=None, pricing=None):
         is_long = ('x' in pid) and pid[:4].isdigit()
         rv = registry.get(pid) or {}
         name = KNOWN_PLUGINS.get(pid) or rv.get('name') or ''
+        # short-name plugins are Bubble's own built-ins; marketplace authors come from the registry
+        author = rv.get('author') or ('' if is_long else 'Bubble')
         pr = pricing.get(pid) or {}
-        base = {'id': pid, 'version': str(ver), 'name': name,
+        base = {'id': pid, 'version': str(ver), 'name': name, 'author': author,
                 'url': ('https://bubble.io/plugin/' + pid) if is_long else '',
                 'delisted': bool(is_long and rv.get('delisted')),
                 'paid': pr.get('status') == 'paid',
@@ -1052,7 +1166,7 @@ STR = {
   'th_page': 'Página', 'th_class': 'Classificação', 'th_id': 'ID interno', 'th_reuse': 'Elemento reutilizável',
   'th_wf': 'Workflow (wf_name)', 'th_folder': 'Pasta', 'th_sit': 'Situação',
   'th_os': 'Nome (chave)', 'th_osd': 'Rótulo', 'th_sty': 'Estilo', 'th_styt': 'Tipo', 'th_styid': 'ID',
-  'th_plug': 'Plugin', 'th_ver': 'Versão', 'th_obs': 'Observação',
+  'th_plug': 'Plugin', 'th_author': 'Autor', 'th_ver': 'Versão', 'th_obs': 'Observação',
   'nav_never': 'nunca disparado', 'nav_trans': 'só chamado por WF morto', 'legacy': 'nome-legado',
   'filter_page': 'filtrar por nome da página…', 'filter_wf': 'filtrar por nome do workflow…',
   'all': 'Todas', 'noname': '(nome só visível no editor)',
@@ -1121,13 +1235,23 @@ STR = {
   'wf_bce_b': 'Custom Events no backend cujo id não é alvo de nenhum Trigger/Schedule custom event em lugar nenhum.',
   'wf_ce_t': '8a · Custom Events (páginas/reusáveis) nunca chamados',
   'wf_ce_b': 'Custom Events definidos em páginas ou reusáveis que nenhum Trigger/Schedule custom event dispara. Confiança alta.',
-  'wf_orphan_t': '8b · Workflows com gatilho em elemento inexistente (deletado)',
-  'wf_orphan_b': 'O evento está ligado a um <code>element_id</code> que não existe mais — o elemento foi deletado, então o workflow nunca dispara. Confiança alta.',
+  'wf_orphan_t': '8b · Workflows com gatilho em elemento inexistente no container',
+  'wf_orphan_b': 'O evento está ligado a um <code>element_id</code> que não existe na árvore de elementos da própria página/reusável. Duas causas: o elemento foi <strong>deletado</strong>, ou foi <strong>movido para um reusável</strong> — o “convert to reusable” do Bubble move os elementos, mas deixa para trás o workflow do container original (o elemento ganha workflows novos dentro do reusável). Nos dois casos o workflow listado nunca dispara — a coluna “Onde está o elemento” mostra a evidência. Confiança alta.',
+  'wf_orphan_moved': 'movido para', 'wf_orphan_del': 'não existe mais (deletado)',
+  'th_elemwhere': 'Onde está o elemento',
   'wf_hidden_t': '8c · Workflows com gatilho em elemento que nunca é renderizado',
   'wf_hidden_b': 'Agora <strong>com as condicionais consideradas</strong> (aba <em>Conditional</em> = <code>states</code>). O gatilho está ligado a um elemento que <strong>nunca aparece na tela</strong>: nem ele nem nenhum grupo-pai pode ficar visível — <code>is_visible</code> padrão = não, nenhuma ação Show/Toggle/Animate e nenhuma condicional que o exiba. A coluna <em>Motivo</em> mostra se é o próprio elemento ou um grupo-pai oculto. Resíduo a verificar: condicionais cujo resultado nunca é verdadeiro, visibilidade via plugin/JS, ou regras de responsividade.',
   'th_trigger': 'Gatilho', 'th_container': 'Página/Reusável', 'th_event': 'Custom Event', 'th_elem': 'Elemento',
   'th_reason': 'Motivo', 'wf_h_self': 'elemento nunca exibido', 'wf_h_anc': 'grupo-pai oculto:',
-  'wf_kp': 'página', 'wf_kr': 'reusável',
+  'wf_kp': 'página', 'wf_kr': 'reusável', 'wf_km': 'view mobile',
+  'mob_t': '1b · Views do app nativo (mobile) nunca navegadas',
+  'mob_b': 'O app nativo tem suas próprias views (<code>mobile_views</code>). Uma view só é alcançável por: ser a <strong>view inicial</strong>, ter papel de sistema (<code>built_in_mobile_views</code>, ex.: update_app, reset_password) ou ser destino de uma ação <strong>MobileNavigate</strong>. As views abaixo não têm navegação nem papel de sistema. Ressalva: deep links e push notifications podem abrir views diretamente — confirme antes de excluir.',
+  'mob_roles': 'Views de sistema (sempre mantidas):', 'mob_initial': 'view inicial',
+  'mob_none': 'Todas as views mobile são navegadas ou têm papel de sistema.',
+  'mob_broken_t': 'Navegações mobile quebradas (destino não existe)',
+  'mob_broken_b': 'Ações <code>MobileNavigate</code> cujo destino não corresponde a nenhuma view existente — a view foi deletada e a ação falha silenciosamente em runtime. Remova a ação (ou o workflow que a contém).',
+  'th_view': 'View', 'th_navs': 'Navegações para ela', 'th_wfs': 'Workflows', 'th_target': 'Destino (id)',
+  'mob_disabled': 'workflow desativado', 'c_mob': 'Views mobile sem uso', 'mob_card_of': 'app nativo',
   'c_wf': 'Custom Events sem uso', 'c_wf_orphan': 'WF em elemento inexistente',
   'method': 'Metodologia & limites', 'already_deleted': 'já deletados',
   'pages_none': 'Todas as páginas são navegadas ou referenciadas — nenhuma candidata a exclusão.',
@@ -1140,7 +1264,11 @@ STR = {
   'dt_none_fields': 'Todos os campos estão em uso.',
   'wf_bce_none': 'Todos os Custom Events do backend são chamados.',
   'wf_ce_none': 'Todos os Custom Events de páginas/reusáveis são chamados.',
-  'wf_orphan_none': 'Nenhum workflow com gatilho em elemento deletado.',
+  'wf_orphan_none': 'Nenhum workflow com gatilho em elemento inexistente.',
+  'back_wh_t': 'Possíveis webhooks — verificar antes de excluir',
+  'back_wh_b': 'Workflows com <strong>Parameter definition = “Detect request data”</strong> (<code>parameter_def: auto</code>) — assinatura típica de <strong>webhook</strong> inicializado por um serviço externo (o export guarda o payload de exemplo capturado na inicialização). Quem chama é um serviço de fora (ex.: um gateway de pagamento), invisível à análise estática, então estes NÃO entram na lista de exclusão. Atenção: se “Expose as a public API workflow” estiver <strong>desmarcado</strong>, o Bubble não atende chamadas externas — confirme no ambiente live se o webhook ainda está ativo e, se estiver em uso, marque o expose.',
+  'wh_exposed': 'Exposto?', 'wh_yes': 'sim', 'wh_no': 'NÃO — não atende chamada externa hoje',
+  'wh_payload': 'payload de exemplo capturado',
   'wf_hidden_none': 'Nenhum workflow com gatilho em elemento que nunca é renderizado.',
  },
  'en': {
@@ -1170,7 +1298,7 @@ STR = {
   'th_page': 'Page', 'th_class': 'Classification', 'th_id': 'Internal ID', 'th_reuse': 'Reusable element',
   'th_wf': 'Workflow (wf_name)', 'th_folder': 'Folder', 'th_sit': 'Status',
   'th_os': 'Name (key)', 'th_osd': 'Label', 'th_sty': 'Style', 'th_styt': 'Type', 'th_styid': 'ID',
-  'th_plug': 'Plugin', 'th_ver': 'Version', 'th_obs': 'Note',
+  'th_plug': 'Plugin', 'th_author': 'Author', 'th_ver': 'Version', 'th_obs': 'Note',
   'nav_never': 'never triggered', 'nav_trans': 'only called by dead WF', 'legacy': 'legacy-name',
   'filter_page': 'filter by page name…', 'filter_wf': 'filter by workflow name…',
   'all': 'All', 'noname': '(name only visible in editor)',
@@ -1239,13 +1367,23 @@ STR = {
   'wf_bce_b': 'Backend Custom Events whose id is the target of no Trigger/Schedule custom-event action anywhere.',
   'wf_ce_t': '8a · Custom Events (pages/reusables) never called',
   'wf_ce_b': 'Custom Events defined on pages or reusables that no Trigger/Schedule custom-event action fires. High confidence.',
-  'wf_orphan_t': '8b · Workflows triggered by a missing (deleted) element',
-  'wf_orphan_b': 'The event is bound to an <code>element_id</code> that no longer exists — the element was deleted, so the workflow can never fire. High confidence.',
+  'wf_orphan_t': '8b · Workflows triggered by an element missing from the container',
+  'wf_orphan_b': 'The event is bound to an <code>element_id</code> that does not exist in the page/reusable’s own element tree. Two causes: the element was <strong>deleted</strong>, or it was <strong>moved into a reusable</strong> — Bubble’s “convert to reusable” moves the elements but leaves the original container’s workflow behind (the element gets fresh workflows inside the reusable). Either way the listed workflow can never fire — the “Where is the element” column shows the evidence. High confidence.',
+  'wf_orphan_moved': 'moved to', 'wf_orphan_del': 'no longer exists (deleted)',
+  'th_elemwhere': 'Where is the element',
   'wf_hidden_t': '8c · Workflows triggered by an element that is never rendered',
   'wf_hidden_b': 'Now <strong>with conditionals accounted for</strong> (the <em>Conditional</em> tab = <code>states</code>). The trigger is bound to an element that <strong>never appears on screen</strong>: neither it nor any parent group can become visible — default <code>is_visible</code> = no, no Show/Toggle/Animate action, and no conditional reveals it. The <em>Reason</em> column shows whether it is the element itself or a hidden parent group. Residual to verify: conditionals that never evaluate true, plugin/JS-driven visibility, or responsive rules.',
   'th_trigger': 'Trigger', 'th_container': 'Page/Reusable', 'th_event': 'Custom Event', 'th_elem': 'Element',
   'th_reason': 'Reason', 'wf_h_self': 'element never shown', 'wf_h_anc': 'hidden parent group:',
-  'wf_kp': 'page', 'wf_kr': 'reusable',
+  'wf_kp': 'page', 'wf_kr': 'reusable', 'wf_km': 'mobile view',
+  'mob_t': '1b · Native mobile app views never navigated to',
+  'mob_b': 'The native app has its own views (<code>mobile_views</code>). A view is reachable only by being the <strong>initial view</strong>, holding a system role (<code>built_in_mobile_views</code>, e.g. update_app, reset_password) or being the target of a <strong>MobileNavigate</strong> action. The views below have neither navigation nor a system role. Caveat: deep links and push notifications can open views directly — verify before deleting.',
+  'mob_roles': 'System views (always kept):', 'mob_initial': 'initial view',
+  'mob_none': 'Every mobile view is either navigated to or holds a system role.',
+  'mob_broken_t': 'Broken mobile navigations (target does not exist)',
+  'mob_broken_b': '<code>MobileNavigate</code> actions whose target matches no existing view — the view was deleted and the action silently fails at runtime. Remove the action (or its workflow).',
+  'th_view': 'View', 'th_navs': 'Navigations to it', 'th_wfs': 'Workflows', 'th_target': 'Target (id)',
+  'mob_disabled': 'workflow disabled', 'c_mob': 'Unused mobile views', 'mob_card_of': 'native app',
   'c_wf': 'Unused Custom Events', 'c_wf_orphan': 'WF on missing element',
   'method': 'Methodology & limits', 'already_deleted': 'already deleted',
   'pages_none': 'Every page is navigated to or referenced — no deletion candidates.',
@@ -1258,7 +1396,11 @@ STR = {
   'dt_none_fields': 'All fields are in use.',
   'wf_bce_none': 'All backend Custom Events are called.',
   'wf_ce_none': 'All page/reusable Custom Events are called.',
-  'wf_orphan_none': 'No workflow is triggered by a deleted element.',
+  'wf_orphan_none': 'No workflow is triggered by a missing element.',
+  'back_wh_t': 'Possible webhooks — verify before deleting',
+  'back_wh_b': 'Workflows with <strong>Parameter definition = “Detect request data”</strong> (<code>parameter_def: auto</code>) — the typical signature of a <strong>webhook</strong> initialized by an external service (the export keeps the sample payload captured at initialization). The caller is an outside service (e.g. a payment gateway), invisible to static analysis, so these are NOT listed for deletion. Note: if “Expose as a public API workflow” is <strong>unchecked</strong>, Bubble rejects external calls — check in the live environment whether the webhook is still active and, if in use, tick expose.',
+  'wh_exposed': 'Exposed?', 'wh_yes': 'yes', 'wh_no': 'NO — external calls are rejected today',
+  'wh_payload': 'sample payload captured',
   'wf_hidden_none': 'No workflow is triggered by a never-rendered element.',
  },
 }
@@ -1268,7 +1410,8 @@ def esc(s):
 
 def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend, exposed,
                 opt, sty, plug_orphan, plug_cfg, plug_used, plug_total, dt,
-                plug_used_list=None, variables=None, wfaudit=None, apicalls=None, ghosts=None, initial_deleted=None):
+                plug_used_list=None, variables=None, wfaudit=None, apicalls=None, ghosts=None,
+                initial_deleted=None, mobile=None):
     T = STR[lang]
     initial_deleted = sorted(initial_deleted or [])
     EXPORT_TITLES = {'page': 'Pages', 'reusable': 'Reusable elements', 'workflow': 'Backend workflows',
@@ -1276,7 +1419,8 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
                      'colorvar': 'Color variables', 'fontvar': 'Font variables',
                      'customevent': 'Custom events (uncalled)', 'pagewf': 'Workflows on missing element',
                      'hiddenwf': 'Workflows on never-rendered element', 'apicall': 'API Connector calls (unused)',
-                     'ghostref': 'Removed-plugin references', 'datatype': 'Data tables', 'field': 'Data fields'}
+                     'ghostref': 'Removed-plugin references', 'datatype': 'Data tables', 'field': 'Data fields',
+                     'mobileview': 'Mobile views', 'mobilenav': 'Broken mobile navigations'}
     unused_pages = [p for p in pages if p['unused']]
     ref_url_pages = sorted([p for p in pages if p.get('referenced_by_url')], key=lambda x: -x['name_url_hits'])
     # attach sheet verdicts
@@ -1373,6 +1517,18 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
         f"<div class=\"scroll\"><table id=\"btab\"><thead><tr><th>{T['th_wf']}</th><th>{T['th_folder']}</th>"
         f"<th>{T['th_sit']}</th><th>{T['th_id']}</th>{del_h}</tr></thead><tbody>{back_rows}</tbody></table></div>")
         if (back_hard or back_trans) else all_clear(T['back_none']))
+    back_wh = sorted([r for r in backend if r.get('webhook_verify')],
+                     key=lambda x: (x['folder'], x['wf_name'] or ''))
+    back_wh_block = ((
+        f"<h3>{T['back_wh_t']} ({len(back_wh)})</h3><p class=\"dim\">{T['back_wh_b']}</p>"
+        + simple(back_wh, [T['th_wf'], T['th_folder'], T['wh_exposed'], T['th_id']],
+                 lambda r: [f"<span class='mono'>{esc(r['wf_name'])}</span>", esc(r['folder']),
+                            ((f"<span class='vbadge v-green'>{T['wh_yes']}</span>" if r['expose']
+                              else f"<span class='vbadge v-red'>{T['wh_no']}</span>")
+                             + (f" <span class='tag'>{T['wh_payload']}</span>"
+                                if r.get('webhook_initialized') else '')),
+                            f"<span class='mono dim'>{esc(r['inner_id'])}</span>"]))
+        if back_wh else '')
     opt_tbl = simple(opt_unused, [T['th_os'], T['th_osd']],
                      lambda r: [f"<span class='mono'>{esc(r['name'])}</span>", esc(r['display'])],
                      keyfn=lambda r: ('optionset:' + str(r['name']), r['name'])) \
@@ -1413,18 +1569,21 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
         px = ' · ' + esc(r['price']) if r.get('price') else ''
         return " <span class='vbadge v-red'>" + T['plug_paid'] + px + "</span>"
     unused_paid = [p for p in (plug_orphan + plug_cfg) if p.get('paid')]
+    def author_cell(r):
+        return esc(r.get('author')) if r.get('author') else "<span class='dim'>—</span>"
     def plug_tbl(rows):
         b = ''.join(f"<tr><td>{plug_name_cell(r)}{global_badge if r.get('headless') else ''}{paid_badge(r)}</td>"
+                    f"<td>{author_cell(r)}</td>"
                     f"<td class='mono dim'>{esc(r['id'])}</td><td class='mono'>{esc(r['version'])}</td>"
                     f"<td class='dim'>{esc(r['reason'])}</td>{chk('plugin:'+str(r['id']), r['name'] or r['id'])}</tr>" for r in rows)
-        return f"<table><thead><tr><th>{T['th_plug']}</th><th>ID</th><th>{T['th_ver']}</th><th>{T['th_obs']}</th>{del_h}</tr></thead><tbody>{b}</tbody></table>"
+        return f"<table><thead><tr><th>{T['th_plug']}</th><th>{T['th_author']}</th><th>ID</th><th>{T['th_ver']}</th><th>{T['th_obs']}</th>{del_h}</tr></thead><tbody>{b}</tbody></table>"
     plug_orphan_tbl = plug_tbl(plug_orphan) if plug_orphan else all_clear(T['plug_none_orphan'])
     plug_cfg_block = (f"<div class='note note-amber'>{T['plug_cfg_b']}</div>{plug_tbl(plug_cfg)}"
                       if plug_cfg else all_clear(T['plug_none_cfg']))
     # in-use plugins: reference list only (kept), name + marketplace link, no checkbox
     plug_used_rows = plug_used_list or []
-    plug_used_tbl = (f"<div class='scroll'><table><thead><tr><th>{T['th_plug']}</th><th>ID</th><th>{T['th_ver']}</th></tr></thead><tbody>"
-                     + ''.join(f"<tr><td>{plug_name_cell(r)}</td><td class='mono dim'>{esc(r['id'])}</td>"
+    plug_used_tbl = (f"<div class='scroll'><table><thead><tr><th>{T['th_plug']}</th><th>{T['th_author']}</th><th>ID</th><th>{T['th_ver']}</th></tr></thead><tbody>"
+                     + ''.join(f"<tr><td>{plug_name_cell(r)}</td><td>{author_cell(r)}</td><td class='mono dim'>{esc(r['id'])}</td>"
                                f"<td class='mono'>{esc(r['version'])}</td></tr>" for r in plug_used_rows)
                      + "</tbody></table></div>")
 
@@ -1465,7 +1624,8 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
     # ---- workflow audit (section 8 + backend 3b) ----
     wf = wfaudit or {'backend_ce': [], 'page_ce': [], 'orphan': [], 'hidden': []}
     def kindtag(k):
-        return f"<span class='tag'>{T['wf_kp'] if k == 'page' else T['wf_kr']}</span>"
+        lbl = {'page': T['wf_kp'], 'reusable': T['wf_kr'], 'mobile': T['wf_km']}.get(k, T['wf_kr'])
+        return f"<span class='tag'>{lbl}</span>"
     wf_bce_tbl = ''.join(f"<tr><td class='mono'>{esc(r['name'])}</td><td class='mono dim'>{esc(r['id'])}</td>"
                          f"{chk('customevent:' + str(r['id']), r['name'])}</tr>" for r in wf['backend_ce'])
     wf_bce_tbl = (f"<table><thead><tr><th>{T['th_event']}</th><th>{T['th_id']}</th>{del_h}</tr></thead><tbody>{wf_bce_tbl}</tbody></table>"
@@ -1475,11 +1635,42 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
                         for r in wf['page_ce'])
     wf_ce_tbl = (f"<table><thead><tr><th>{T['th_event']}</th><th>{T['th_container']}</th><th>{T['th_id']}</th>{del_h}</tr></thead><tbody>{wf_ce_tbl}</tbody></table>"
                  if wf['page_ce'] else f"<div class='note note-green'>{T['wf_ce_none']}</div>")
+    def orphan_where(r):
+        if r.get('moved_to'):
+            return (f"<span class='vbadge v-orange'>{T['wf_orphan_moved']}</span> "
+                    f"<span class='mono'>{esc(r['moved_to'])}</span> {kindtag(r.get('moved_to_kind') or '')}")
+        return f"<span class='vbadge v-red'>{T['wf_orphan_del']}</span>"
     wf_orphan_tbl = ''.join(f"<tr><td>{esc(r['container'])} {kindtag(r['kind'])}</td><td><span class='tag'>{esc(r['trigger'])}</span></td>"
-                            f"<td class='mono dim'>{esc(r['element_id'])}</td>{chk('pagewf:' + str(r['id']), (r['container'] or '') + ' · ' + (r['trigger'] or ''))}</tr>"
+                            f"<td class='mono dim'>{esc(r['element_id'])}</td><td>{orphan_where(r)}</td>{chk('pagewf:' + str(r['id']), (r['container'] or '') + ' · ' + (r['trigger'] or ''))}</tr>"
                             for r in wf['orphan'])
-    wf_orphan_tbl = (f"<table><thead><tr><th>{T['th_container']}</th><th>{T['th_trigger']}</th><th>{T['th_id']} (elem)</th>{del_h}</tr></thead><tbody>{wf_orphan_tbl}</tbody></table>"
+    wf_orphan_tbl = (f"<table><thead><tr><th>{T['th_container']}</th><th>{T['th_trigger']}</th><th>{T['th_id']} (elem)</th><th>{T['th_elemwhere']}</th>{del_h}</tr></thead><tbody>{wf_orphan_tbl}</tbody></table>"
                      if wf['orphan'] else f"<div class='note note-green'>{T['wf_orphan_none']}</div>")
+    # native mobile views (only rendered when the app has any)
+    mob = mobile or {'total': 0, 'rows': [], 'unused': [], 'roles': {}, 'broken': []}
+    mob_roles_note = (('<div class="note note-blue">' + T['mob_roles'] + ' ' +
+                       ', '.join(f"<span class='mono'>{esc(r['name'])}</span> "
+                                 f"({esc(T['mob_initial'] if r['role'] == 'initial' else r['role'])})"
+                                 for r in mob['rows'] if r.get('role')) + '</div>')
+                      if any(r.get('role') for r in mob['rows']) else '')
+    mob_unused_tbl = (simple(mob['unused'], [T['th_view'], T['th_wfs'], T['th_id']],
+                             lambda r: [f"<span class='mono'>{esc(r['name'])}</span>"
+                                        + (f" <span class='vbadge v-orange'>{T['legacy']}</span>" if r['name_flag_old'] else ''),
+                                        str(r['workflows']),
+                                        f"<span class='mono dim'>{esc(r['inner_id'])}</span>"],
+                             keyfn=lambda r: ('mobileview:' + str(r['inner_id']), r['name'] or r['inner_id']))
+                      ) if mob['unused'] else all_clear(T['mob_none'])
+    mob_broken_tbl = (simple(mob['broken'], [T['th_container'], T['th_target'], ''],
+                             lambda e: [esc(e['container']) + ' ' + kindtag(e['kind']),
+                                        f"<span class='mono dim'>{esc(e['target'])}</span>",
+                                        (f"<span class='vbadge v-orange'>{T['mob_disabled']}</span>" if e.get('disabled') else '')],
+                             keyfn=lambda e: ('mobilenav:' + str(e['target']) + ':' + str(e['container']),
+                                              (e['container'] or '') + ' → ' + (e['target'] or '')))
+                      ) if mob['broken'] else ''
+    mob_block = ((f"<h3>{T['mob_t']} ({len(mob['unused'])})</h3><p class=\"dim\">{T['mob_b']}</p>"
+                  f"{mob_roles_note}{mob_unused_tbl}"
+                  + (f"<h3>{T['mob_broken_t']} ({len(mob['broken'])})</h3><p class=\"dim\">{T['mob_broken_b']}</p>{mob_broken_tbl}"
+                     if mob['broken'] else ''))
+                 if mob['total'] else '')
     def hidden_reason(r):
         if r.get('reason') == 'ancestor':
             return f"<span class='vbadge v-orange'>{T['wf_h_anc']}</span> <span class='mono'>{esc(r.get('blocker'))}</span>"
@@ -1606,6 +1797,7 @@ tr.done td:not(.cellchk){{opacity:.4;text-decoration:line-through}}
 <div class="note note-blue"><strong>{T['how_title']}.</strong> {T['how_body']}</div>
 <div class="cards">
 <div class="card k-orange"><div class="big">{len(unused_pages)}</div><div class="lab">{T['c_pages']}</div><div class="of">{T['of']} {total_pages}</div></div>
+{('<div class="card k-orange"><div class="big">' + str(len(mob['unused'])) + '</div><div class="lab">' + T['c_mob'] + '</div><div class="of">' + T['of'] + ' ' + str(mob['total']) + ' · ' + T['mob_card_of'] + (' · ' + str(len(mob['broken'])) + ' nav ✗' if mob['broken'] else '') + '</div></div>') if mob['total'] else ''}
 <div class="card k-red"><div class="big">{len(reuse_hard)+len(reuse_trans)}</div><div class="lab">{T['c_reuse']}</div><div class="of">{T['of']} {len(reuse)}</div></div>
 <div class="card k-red"><div class="big">{len(back_hard)+len(back_trans)}</div><div class="lab">{T['c_back']}</div><div class="of">{T['of']} {len(backend)} · {exposed} {T['exposed']}</div></div>
 <div class="card k-orange"><div class="big">{len(opt_unused)}</div><div class="lab">{T['c_opt']}</div><div class="of">{T['of']} {len(opt)}</div></div>
@@ -1614,13 +1806,14 @@ tr.done td:not(.cellchk){{opacity:.4;text-decoration:line-through}}
 <div class="card k-orange"><div class="big">{n_fcand}</div><div class="lab">{T['c_dtF']}</div><div class="of">+{n_fexp} {T['st_api']}</div></div>
 <div class="card k-red"><div class="big">{len(dtT['unused'])}</div><div class="lab">{T['c_dtT']}</div><div class="of">{T['of']} {dtT['active']} · {dtT['exposed']} API</div></div>
 <div class="card k-orange"><div class="big">{len(wf['backend_ce']) + len(wf['page_ce'])}</div><div class="lab">{T['c_wf']}</div><div class="of">{len(wf['backend_ce'])} backend + {len(wf['page_ce'])} páginas</div></div>
-<div class="card k-red"><div class="big">{len(wf['orphan']) + len(wf['hidden'])}</div><div class="lab">{T['c_wf_orphan']}</div><div class="of">{len(wf['orphan'])} deletado + {len(wf['hidden'])} nunca renderizado</div></div>
+<div class="card k-red"><div class="big">{len(wf['orphan']) + len(wf['hidden'])}</div><div class="lab">{T['c_wf_orphan']}</div><div class="of">{len(wf['orphan'])} inexistente + {len(wf['hidden'])} nunca renderizado</div></div>
 <div class="card k-orange"><div class="big">{len(apc['unused'])}</div><div class="lab">{T['c_api']}</div><div class="of">{T['of']} {apc['total']} · {apc['providers']} APIs</div></div>
 <div class="card k-red"><div class="big">{len(gh['refs'])}</div><div class="lab">{T['c_ghost']}</div><div class="of">{gh['plugin_count']} plugins removidos</div></div>
 </div>
 
 <h2 id="p">{T['s_pages']}</h2><p class="q">{T['q_pages']}</p>
 {pages_block}
+{mob_block}
 
 <h2 id="r">{T['s_reuse']}</h2><p class="q">{T['q_reuse']}</p>
 {reuse_block}
@@ -1633,6 +1826,7 @@ tr.done td:not(.cellchk){{opacity:.4;text-decoration:line-through}}
 <div class="card k-orange"><div class="big">{len(back_trans)}</div><div class="lab">{T['trans']}</div></div>
 <div class="card k-green"><div class="big">{exposed}</div><div class="lab">{T['exposed']}</div></div></div>
 {back_block}
+{back_wh_block}
 <h3>3b · {T['wf_bce_t']} ({len(wf['backend_ce'])})</h3><p class="dim">{T['wf_bce_b']}</p>{wf_bce_tbl}
 
 <h2 id="o">{T['s_opt']}</h2><p class="q">{T['q_opt']}</p>
@@ -1757,6 +1951,7 @@ def main():
     dt = analyze_datatypes(data, quoted, content_raw, script_corpus)
     wfaudit = analyze_workflows(data)
     ghosts = analyze_ghost_plugins(data, plug_registry)
+    mobile = analyze_mobile_views(data)
 
     page_audit = {}
     if args.pages_csv:
@@ -1769,7 +1964,7 @@ def main():
     html_str = render_html(app_name, args.date, args.lang, pages, dyn, page_audit, reuse,
                            backend, exposed, opt, sty, plug_orphan, plug_cfg, len(plug_used_list), plug_total,
                            dt, plug_used_list=plug_used_list, variables=variables, wfaudit=wfaudit,
-                           apicalls=apicalls, ghosts=ghosts, initial_deleted=initial_deleted)
+                           apicalls=apicalls, ghosts=ghosts, initial_deleted=initial_deleted, mobile=mobile)
     out = args.out or (os.path.splitext(args.input)[0] + '_unused_report.html')
     with open(out, 'w', encoding='utf-8') as f:
         f.write(html_str)
@@ -1789,7 +1984,10 @@ def main():
                       'duplicate_name': [{'name': r['name'], 'inner_id': r['inner_id'], 'used_twin': r['twin_used_id']} for r in reuse if r.get('dup_name_conflict')]},
         'backend': {'total_apievents': len(backend), 'exposed': exposed,
                     'unused_hard': [{'wf_name': r['wf_name'], 'inner_id': r['inner_id'], 'folder': r['folder']} for r in backend if r['unused_hard']],
-                    'unused_transitive': [{'wf_name': r['wf_name'], 'inner_id': r['inner_id'], 'folder': r['folder']} for r in backend if r['unused_transitive']]},
+                    'unused_transitive': [{'wf_name': r['wf_name'], 'inner_id': r['inner_id'], 'folder': r['folder']} for r in backend if r['unused_transitive']],
+                    'webhook_verify': [{'wf_name': r['wf_name'], 'inner_id': r['inner_id'], 'folder': r['folder'],
+                                        'expose': r['expose'], 'initialized': r.get('webhook_initialized', False)}
+                                       for r in backend if r.get('webhook_verify')]},
         'option_sets': {'total': len(opt), 'unused': [{'name': o['name'], 'display': o['display']} for o in opt if o['unused']]},
         'plugins': {'total': plug_total, 'used_with_ui': len(plug_used_list), 'orphaned': plug_orphan,
                     'configured_no_ui': plug_cfg, 'in_use': plug_used_list,
@@ -1806,6 +2004,13 @@ def main():
                         'exposed_data_api_only': len(dt['fields']['exposed']),
                         'referenced_in_script': len(dt['fields']['script']),
                         'unused': dt['fields']['candidates']},
+        'mobile_views': {'total': mobile['total'],
+                         'unused': [{'name': r['name'], 'inner_id': r['inner_id'],
+                                     'workflows': r['workflows'], 'elements': r['elements']}
+                                    for r in mobile['unused']],
+                         'system_roles': [{'inner_id': r['inner_id'], 'name': r['name'], 'role': r['role']}
+                                          for r in mobile['rows'] if r.get('role')],
+                         'broken_navigations': mobile['broken']},
         'workflow_audit': {'backend_custom_events_uncalled': wfaudit['backend_ce'],
                            'page_custom_events_uncalled': wfaudit['page_ce'],
                            'triggers_on_missing_element': wfaudit['orphan'],
@@ -1822,11 +2027,16 @@ def main():
     print('== Bubble unused-entities audit: %s ==' % app_name)
     print('  Pages           : %d / %d no id-navigation; of those %d linked by URL/name (kept) -> %d deletable candidates'
           % (len(up) + len(ref_url), len(pages), len(ref_url), len(up)))
+    if mobile['total']:
+        print('  Mobile views    : %d never navigated / %d (%d system-role) | broken navigations: %d'
+              % (len(mobile['unused']), mobile['total'],
+                 sum(1 for r in mobile['rows'] if r.get('role')), len(mobile['broken'])))
     print('  Reusables       : %d never placed (+%d transitively dead, %d duplicate-name to verify) / %d'
           % (len(summary['reusables']['unused_hard']), len(summary['reusables']['unused_transitive']),
              len(summary['reusables']['duplicate_name']), len(reuse)))
-    print('  Backend WFs     : %d unreachable (+%d transitive) / %d APIEvents (%d exposed endpoints)'
-          % (len(summary['backend']['unused_hard']), len(summary['backend']['unused_transitive']), len(backend), exposed))
+    print('  Backend WFs     : %d unreachable (+%d transitive, %d webhook-shaped to verify) / %d APIEvents (%d exposed endpoints)'
+          % (len(summary['backend']['unused_hard']), len(summary['backend']['unused_transitive']),
+             len(summary['backend']['webhook_verify']), len(backend), exposed))
     print('  Option sets     : %d unused / %d' % (len(summary['option_sets']['unused']), len(opt)))
     _paid = [p for p in (plug_orphan + plug_cfg) if p.get('paid')]
     print('  Plugins         : %d orphaned (+%d no-UI-but-active) / %d | UNUSED PAID (alert): %d'
@@ -1838,8 +2048,10 @@ def main():
     print('  Custom events   : %d backend + %d page/reusable never called'
           % (len(wfaudit['backend_ce']), len(wfaudit['page_ce'])))
     _hs = sum(1 for r in wfaudit['hidden'] if r.get('reason') == 'self')
-    print('  Dead triggers   : %d on deleted element + %d never-rendered (%d element itself, %d hidden ancestor group)'
-          % (len(wfaudit['orphan']), len(wfaudit['hidden']), _hs, len(wfaudit['hidden']) - _hs))
+    _moved = sum(1 for r in wfaudit['orphan'] if r.get('moved_to'))
+    print('  Dead triggers   : %d on missing element (%d moved to a reusable, %d deleted) + %d never-rendered (%d element itself, %d hidden ancestor group)'
+          % (len(wfaudit['orphan']), _moved, len(wfaudit['orphan']) - _moved,
+             len(wfaudit['hidden']), _hs, len(wfaudit['hidden']) - _hs))
     print('  API Connector   : %d unused calls / %d declared (%d providers)'
           % (len(apicalls['unused']), apicalls['total'], apicalls['providers']))
     print('  Removed plugins : %d ghost references from %d uninstalled plugins still in the app'
