@@ -302,8 +302,23 @@ def analyze_mobile_views(data):
                      'elements': len(v.get('elements') or {}),
                      'unused': (targets.get(iid, 0) == 0 and roles.get(iid) is None)})
     rows.sort(key=lambda r: ((r['name'] or '').lower(), r['inner_id'] or ''))
+    # Same-name twin guard (mirrors the reusables rule): Bubble's App Search Tool matches
+    # "Go to view ..." by display NAME, so a live twin's navigations make a dead same-named
+    # view look used in the editor — never present it as a clean delete; route to a verify
+    # bucket showing which twin is actually in use.
+    by_name = defaultdict(list)
+    for r in rows:
+        by_name[r['name'] or ''].append(r)
+    for r in rows:
+        if r['unused']:
+            twin = next((t for t in by_name[r['name'] or ''] if t is not r and not t['unused']), None)
+            if twin:
+                r['unused'] = False
+                r['dup_name_conflict'] = True
+                r['twin_used_id'] = twin['inner_id']
     broken = [e for e in nav_edges if e['target'] not in ids]
     return {'total': len(rows), 'rows': rows, 'unused': [r for r in rows if r['unused']],
+            'duplicate_name': [r for r in rows if r.get('dup_name_conflict')],
             'roles': {vid: rname for vid, rname in roles.items()}, 'broken': broken}
 
 def analyze_reusables(data, quoted):
@@ -1248,6 +1263,8 @@ STR = {
   'mob_b': 'O app nativo tem suas próprias views (<code>mobile_views</code>). Uma view só é alcançável por: ser a <strong>view inicial</strong>, ter papel de sistema (<code>built_in_mobile_views</code>, ex.: update_app, reset_password) ou ser destino de uma ação <strong>MobileNavigate</strong>. As views abaixo não têm navegação nem papel de sistema. Ressalva: deep links e push notifications podem abrir views diretamente — confirme antes de excluir.',
   'mob_roles': 'Views de sistema (sempre mantidas):', 'mob_initial': 'view inicial',
   'mob_none': 'Todas as views mobile são navegadas ou têm papel de sistema.',
+  'mob_dup_t': 'Views sem navegação com gêmea de mesmo nome EM USO — verificar',
+  'mob_dup_b': 'Nenhuma navegação aponta para estas views, mas existe OUTRA view com exatamente o mesmo nome que está em uso. O App Search Tool do Bubble busca “Go to view …” por nome, então os usos da gêmea aparecem como se fossem desta — é fácil excluir a errada. Confira pelo ID interno (a coluna “Gêmea” mostra a viva) e por sinais no editor (nº de workflows, conteúdo) antes de excluir.',
   'mob_broken_t': 'Navegações mobile quebradas (destino não existe)',
   'mob_broken_b': 'Ações <code>MobileNavigate</code> cujo destino não corresponde a nenhuma view existente — a view foi deletada e a ação falha silenciosamente em runtime. Remova a ação (ou o workflow que a contém).',
   'th_view': 'View', 'th_navs': 'Navegações para ela', 'th_wfs': 'Workflows', 'th_target': 'Destino (id)',
@@ -1380,6 +1397,8 @@ STR = {
   'mob_b': 'The native app has its own views (<code>mobile_views</code>). A view is reachable only by being the <strong>initial view</strong>, holding a system role (<code>built_in_mobile_views</code>, e.g. update_app, reset_password) or being the target of a <strong>MobileNavigate</strong> action. The views below have neither navigation nor a system role. Caveat: deep links and push notifications can open views directly — verify before deleting.',
   'mob_roles': 'System views (always kept):', 'mob_initial': 'initial view',
   'mob_none': 'Every mobile view is either navigated to or holds a system role.',
+  'mob_dup_t': 'Views never navigated to, with a same-named twin IN USE — verify',
+  'mob_dup_b': 'No navigation targets these views, but ANOTHER view with the exact same name is in use. Bubble’s App Search Tool matches “Go to view …” by name, so the twin’s usages look like they belong to this one — deleting the wrong one is easy. Check the internal ID (the “Twin” column shows the live one) and editor signals (workflow count, content) before deleting.',
   'mob_broken_t': 'Broken mobile navigations (target does not exist)',
   'mob_broken_b': '<code>MobileNavigate</code> actions whose target matches no existing view — the view was deleted and the action silently fails at runtime. Remove the action (or its workflow).',
   'th_view': 'View', 'th_navs': 'Navigations to it', 'th_wfs': 'Workflows', 'th_target': 'Target (id)',
@@ -1646,7 +1665,7 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
     wf_orphan_tbl = (f"<table><thead><tr><th>{T['th_container']}</th><th>{T['th_trigger']}</th><th>{T['th_id']} (elem)</th><th>{T['th_elemwhere']}</th>{del_h}</tr></thead><tbody>{wf_orphan_tbl}</tbody></table>"
                      if wf['orphan'] else f"<div class='note note-green'>{T['wf_orphan_none']}</div>")
     # native mobile views (only rendered when the app has any)
-    mob = mobile or {'total': 0, 'rows': [], 'unused': [], 'roles': {}, 'broken': []}
+    mob = mobile or {'total': 0, 'rows': [], 'unused': [], 'duplicate_name': [], 'roles': {}, 'broken': []}
     mob_roles_note = (('<div class="note note-blue">' + T['mob_roles'] + ' ' +
                        ', '.join(f"<span class='mono'>{esc(r['name'])}</span> "
                                  f"({esc(T['mob_initial'] if r['role'] == 'initial' else r['role'])})"
@@ -1666,8 +1685,18 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
                              keyfn=lambda e: ('mobilenav:' + str(e['target']) + ':' + str(e['container']),
                                               (e['container'] or '') + ' → ' + (e['target'] or '')))
                       ) if mob['broken'] else ''
+    mob_dup = mob.get('duplicate_name') or []
+    mob_dup_tbl = (simple(mob_dup, [T['th_view'], T['th_wfs'], T['th_id'], T['th_twin']],
+                          lambda r: [f"<span class='mono'>{esc(r['name'])}</span>",
+                                     str(r['workflows']),
+                                     f"<span class='mono dim'>{esc(r['inner_id'])}</span>",
+                                     f"<span class='mono'>{esc(r['twin_used_id'])}</span> <span class='vbadge v-green'>{T['twin_in_use']}</span>"],
+                          keyfn=lambda r: ('mobileview:' + str(r['inner_id']), r['name'] or r['inner_id']))
+                   ) if mob_dup else ''
     mob_block = ((f"<h3>{T['mob_t']} ({len(mob['unused'])})</h3><p class=\"dim\">{T['mob_b']}</p>"
                   f"{mob_roles_note}{mob_unused_tbl}"
+                  + (f"<h3>{T['mob_dup_t']} ({len(mob_dup)})</h3><div class='note note-amber'>{T['mob_dup_b']}</div>{mob_dup_tbl}"
+                     if mob_dup else '')
                   + (f"<h3>{T['mob_broken_t']} ({len(mob['broken'])})</h3><p class=\"dim\">{T['mob_broken_b']}</p>{mob_broken_tbl}"
                      if mob['broken'] else ''))
                  if mob['total'] else '')
@@ -2008,6 +2037,9 @@ def main():
                          'unused': [{'name': r['name'], 'inner_id': r['inner_id'],
                                      'workflows': r['workflows'], 'elements': r['elements']}
                                     for r in mobile['unused']],
+                         'duplicate_name': [{'name': r['name'], 'inner_id': r['inner_id'],
+                                             'workflows': r['workflows'], 'used_twin': r['twin_used_id']}
+                                            for r in mobile['duplicate_name']],
                          'system_roles': [{'inner_id': r['inner_id'], 'name': r['name'], 'role': r['role']}
                                           for r in mobile['rows'] if r.get('role')],
                          'broken_navigations': mobile['broken']},
@@ -2028,8 +2060,8 @@ def main():
     print('  Pages           : %d / %d no id-navigation; of those %d linked by URL/name (kept) -> %d deletable candidates'
           % (len(up) + len(ref_url), len(pages), len(ref_url), len(up)))
     if mobile['total']:
-        print('  Mobile views    : %d never navigated / %d (%d system-role) | broken navigations: %d'
-              % (len(mobile['unused']), mobile['total'],
+        print('  Mobile views    : %d never navigated (+%d duplicate-name to verify) / %d (%d system-role) | broken navigations: %d'
+              % (len(mobile['unused']), len(mobile['duplicate_name']), mobile['total'],
                  sum(1 for r in mobile['rows'] if r.get('role')), len(mobile['broken'])))
     print('  Reusables       : %d never placed (+%d transitively dead, %d duplicate-name to verify) / %d'
           % (len(summary['reusables']['unused_hard']), len(summary['reusables']['unused_transitive']),
