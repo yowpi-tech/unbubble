@@ -8,8 +8,10 @@ description: >
   INFORMATION SECURITY and RESULT RELIABILITY come first and UX/UI second, redesigns the data
   model where Bubble's structure is inadequate, and produces the Bubble→new-system DATA
   MIGRATION PLAN (CSV export/import vs consuming the Bubble Data API, cutover, validation).
-  Output is an AI-ready rebuild pack (assessment, target architecture, new data model + mapping,
-  migration plan, PRD v2, backlog). Use when the user asks to: "level up", "sair do Bubble",
+  Output is an AI-ready rebuild pack (assessment, target architecture, frontend design brief, new
+  data model + mapping, migration plan, PRD v2, backlog, risks). When the `enterprise-best-practices`
+  skill is available it is applied as a production-readiness lens (13 layers + 5 business themes);
+  otherwise the user is asked whether to install it. Use when the user asks to: "level up", "sair do Bubble",
   "migrar do Bubble", "recriar com melhores práticas", "modernizar o sistema", "upgrade de
   engenharia", "plano de migração", "reengenharia", "novo stack", "repensar o sistema",
   evaluate tech debt of a Bubble app, or plan the rebuild after unbubble:clone. Step 3 (final)
@@ -43,6 +45,29 @@ when available, batches of up to 4 with concrete options + free-text; otherwise 
 record the answers in 08 as dated owner decisions ("Decisões do dono (YYYY-MM-DD)"). Do not design
 around an unanswered blocking question — an assessment built on guesses produces a rebuild pack
 the owner has to redo.
+
+### 0b · Load the production-gate lens (`enterprise-best-practices` skill)
+
+The level-up is exactly a "day-0 architecture + production-readiness" moment, which is what the
+**`enterprise-best-practices`** skill exists for (13 production layers + 5 business themes as
+quality gates). Use it as a lens across the whole pack — assessment dimensions, target-architecture
+day-0 decisions, and the backlog's readiness stories.
+
+1. **Check availability.** If `enterprise-best-practices` is in this session's available-skills
+   list, **invoke it now** (Skill tool) and carry its 13-layer / 5-theme gates into steps 1, 2 and
+   5 — cite the layer next to the finding/story it drives.
+2. **If it is NOT available, ASK the user** (AskUserQuestion when available) whether to install it,
+   offering:
+   - **Install it** — clone `https://github.com/yowpi-tech/enterprise-best-practices` into
+     `~/.claude/skills/enterprise-best-practices` (a new interactive session then sees it); then
+     invoke it.
+   - **Proceed without it** — continue using only `references/assessment-checklist.md`; note in
+     `ASSESSMENT.md` that the enterprise gates were not applied.
+   Do not clone anything without the user's yes, and never block the level-up on it — it enriches
+   the pack, it is not a hard dependency.
+
+When applied, record in `ASSESSMENT.md` which layers/themes were checked, so the pack states its
+own coverage.
 
 ### 1 · Assess the as-is system
 
@@ -153,7 +178,9 @@ levelup/
                            + explicit non-goals
   BACKLOG.md               epics → stories with acceptance criteria, sequenced: foundations
                            (auth, schema, CI) → migration pipeline → modules by business value
-                           → cutover; each story references PRD-v2 sections
+                           → cutover; each story references PRD-v2 sections. If the
+                           enterprise-best-practices gates were applied (step 0b), each unmet
+                           production layer becomes a readiness story here.
   RISKS.md                 top risks with mitigations (migration data loss, endpoint consumers
                            breaking, scope creep, dual-run drift)
 ```
@@ -170,3 +197,5 @@ every decision recorded with its why, every requirement testable.
 - PRD-v2 keeps full traceability to BR-xxx rules so parity is verifiable after the rebuild.
 - FRONTEND-DESIGN.md uses tokens **extracted from the export**, not invented, and is written to be
   run through Claude Design before UI work starts.
+- ASSESSMENT.md states whether the `enterprise-best-practices` gates were applied (which layers/
+  themes), or that they were skipped and why (step 0b).
