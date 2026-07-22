@@ -183,10 +183,68 @@ levelup/
                            production layer becomes a readiness story here.
   RISKS.md                 top risks with mitigations (migration data loss, endpoint consumers
                            breaking, scope creep, dual-run drift)
+  EXECUTION-CONTRACT.md    rules of engagement for the executing AI — read order, story
+                           discipline, the final completeness gate, deviation protocol
 ```
 
 The pack must be **self-sufficient for an AI to implement**: no reference to "the conversation",
 every decision recorded with its why, every requirement testable.
+
+### 5b · Execution contract (so the executing AI leaves nothing behind)
+
+Write `EXECUTION-CONTRACT.md` — the FIRST file the executing AI must read. It contains, at
+minimum:
+
+1. **Source of truth & read order**: this pack (PRD-v2 → DATA-MODEL → TARGET-ARCHITECTURE →
+   BACKLOG → MIGRATION-PLAN) plus the clone `docs/` for domain context and `PARITY-MATRIX.md` as
+   the completeness ledger. Nothing in the pack may be contradicted or "improved away" without a
+   dated owner decision.
+2. **Story discipline**: implement in BACKLOG order respecting dependencies; a story is DONE only
+   when its acceptance criteria demonstrably pass (test or observed behavior); stories are never
+   skipped or silently merged.
+3. **Final completeness gate** — the rebuild is only "done" when: every `PARITY-MATRIX.md` row is
+   checked off (or carries a signed deviation); the BR-xxx test suite is green; readiness stories
+   from the enterprise gates (if applied) are done; MIGRATION-PLAN validation is signed by the
+   owner.
+4. **Deviation protocol**: anything the executor cannot or believes should not implement becomes a
+   listed deviation (what, why, impact) requiring the owner's dated sign-off — dropping a
+   documented item silently is a contract violation, and "the AI decided it was unnecessary" is
+   not a valid disposition.
+
+### 6 · Parity check — verify the rebuild actually uses the whole model
+
+The clone step guarantees *every active field is documented*; step 3 guarantees *every as-is
+field is mapped* in `DATA-MODEL.md`. Neither guarantees the **rebuilt code reads or writes it**.
+That last hop is where fields silently disappear: a column survives the export, the docs, the
+mapping and the migrated schema, but the reconstruction wires only a subset — so the feature is
+"lost" even though the data is right there. (Seen in practice: a whole group of foreign keys
+and their lookup tables existed in the migrated DB, but the module's types/repository/UI never
+touched them.)
+
+Run the parity check against the rebuilt app **whenever a module is reported done**, and again
+before cutover:
+
+```bash
+python3 scripts/parity_check.py \
+  --schema <app>/supabase/migrations \   # or a DATA-MODEL DDL file, or {"tables": {...}} JSON
+  --app    <app>/src \
+  --out    <workdir>/levelup
+```
+
+Dependency-free, read-only. It writes `parity-report.md` / `.json` listing **orphan tables**
+(a schema table whose name never appears in code) and **orphan columns** (split into
+high-confidence composite names and low-signal short names to verify by hand). Structural
+columns (`id`, `organization_id`, timestamps, `bubble_id`, `deleted_at`) are ignored. A
+column/table counts as referenced when its exact snake_case identifier appears anywhere in the
+source (DB names surface in query strings even when the app uses camelCase variables).
+
+For every orphan, record a verdict — this is the gate:
+- **Used** elsewhere (view / generated type / RPC) → note where; not a miss.
+- **Deferred** on purpose → add a BACKLOG story with the reason (so it is tracked, not lost).
+- **Forgotten** → wire the types/repository/UI now.
+
+Never let an orphan pass silently: an unclassified orphan is a candidate lost feature. Record
+the run (coverage %, and the classified orphan list) in `ASSESSMENT.md` or a `PARITY.md` note.
 
 ## Quality bar
 
@@ -199,3 +257,8 @@ every decision recorded with its why, every requirement testable.
   run through Claude Design before UI work starts.
 - ASSESSMENT.md states whether the `enterprise-best-practices` gates were applied (which layers/
   themes), or that they were skipped and why (step 0b).
+- EXECUTION-CONTRACT.md exists and its completeness gate references the clone's PARITY-MATRIX —
+  the executor has no path to "done" that skips documented scope.
+- After a module is rebuilt, `scripts/parity_check.py` was run and **every** orphan table/column
+  it reports is classified (used / deferred-with-reason / fixed) — no silent drops between the
+  DATA-MODEL and the running code (step 6).
