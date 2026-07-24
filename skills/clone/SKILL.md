@@ -102,10 +102,27 @@ docs/
   06-pages-and-reusables.md per module then per page: purpose, content type, key elements,
                             workflows → business rules; reusables and where they're placed
   07-business-rules.md      cross-cutting rules extracted from all of the above, numbered
-                            (BR-001 …) so the PRD can reference them
+                            (BR-001 …) and written in VERIFIABLE form (see below)
   08-open-questions.md      ambiguities, suspected dead logic, smells noted for level-up,
                             anything requiring the owner's confirmation
 ```
+
+#### Business rules must be verifiable, not merely descriptive
+
+A rule an executor can "read past" is a rule that does not get built. Every **behavioural**
+BR-xxx states an observable trigger→response, so it converts to a test with no translation:
+
+> **BR-021 — Reembolso.** QUANDO um pedido pago é cancelado em até 7 dias, O SISTEMA DEVE
+> estornar o valor integral e marcar o pedido como Reembolsado. _Aceite:_ cancelar no 7º dia
+> estorna 100%; no 8º dia o pedido fica Cancelado, sem estorno. _(fonte: 06 Cancel Order; 05)_
+
+- Use `QUANDO … O SISTEMA DEVE …` (or `WHEN … SHALL …`) plus an explicit `Aceite:` line.
+- Keep the source citation — verifiability never replaces traceability.
+- A rule that is pure context (a hierarchy, a glossary, an inventory) is **not** behavioural:
+  mark it `[descritivo]` on the definition line so the level-up's coverage gate exempts it
+  instead of demanding a test for it.
+
+Same rule for the PRD's parity requirements: each is testable or it is not a requirement.
 
 ### 3b · Resolve open questions WITH the user (blocking gate — do NOT skip)
 
@@ -194,6 +211,8 @@ NAMES yes, values never. Treat the inventory dir + docs as internal material.
 - Every active table and field appears in `01-database.md`; every provider call in
   `02-external-apis.md` (marked used/unused); every exposed endpoint in `05-…` with params.
 - Workflows are described as **rules in plain language**, not action-type lists.
+- Every behavioural BR-xxx is in verifiable form (`QUANDO … DEVE …` + `Aceite:`); purely
+  descriptive ones are marked `[descritivo]`. The level-up gate checks this.
 - Anything you could not determine is in `08-open-questions.md` — no silent gaps.
 - Numbers in `00-overview.md` match `summary.json` exactly.
 - `PARITY-MATRIX.md` has a script-generated row for EVERY inventory entity, each with exactly one

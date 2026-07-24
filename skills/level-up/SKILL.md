@@ -176,11 +176,11 @@ levelup/
   PRD-v2.md                PRD-clone rewritten for the new platform: parity requirements
                            (BR-xxx) + the upgrade requirements (security, reliability, UX)
                            + explicit non-goals
-  BACKLOG.md               epics → stories with acceptance criteria, sequenced: foundations
-                           (auth, schema, CI) → migration pipeline → modules by business value
-                           → cutover; each story references PRD-v2 sections. If the
-                           enterprise-best-practices gates were applied (step 0b), each unmet
-                           production layer becomes a readiness story here.
+  BACKLOG.md               epics → ATOMIC stories with acceptance criteria, sequenced:
+                           foundations (auth, schema, CI) → migration pipeline → modules by
+                           business value → cutover; every story CITES the requirement ids it
+                           implements. If the enterprise-best-practices gates were applied
+                           (step 0b), each unmet production layer becomes a readiness story.
   RISKS.md                 top risks with mitigations (migration data loss, endpoint consumers
                            breaking, scope creep, dual-run drift)
   EXECUTION-CONTRACT.md    rules of engagement for the executing AI — read order, story
@@ -203,13 +203,49 @@ minimum:
    when its acceptance criteria demonstrably pass (test or observed behavior); stories are never
    skipped or silently merged.
 3. **Final completeness gate** — the rebuild is only "done" when: every `PARITY-MATRIX.md` row is
-   checked off (or carries a signed deviation); the BR-xxx test suite is green; readiness stories
-   from the enterprise gates (if applied) are done; MIGRATION-PLAN validation is signed by the
-   owner.
+   checked off (or carries a signed deviation); `spec_coverage.py` and `parity_check.py` both
+   pass; the BR-xxx test suite is green; readiness stories from the enterprise gates (if applied)
+   are done; MIGRATION-PLAN validation is signed by the owner.
 4. **Deviation protocol**: anything the executor cannot or believes should not implement becomes a
    listed deviation (what, why, impact) requiring the owner's dated sign-off — dropping a
    documented item silently is a contract violation, and "the AI decided it was unnecessary" is
    not a valid disposition.
+
+### 5c · Spec-coverage gate — no requirement without an executor (run BEFORE delivering)
+
+The parity matrix guards *legacy → disposition*. This gate guards the opposite direction,
+**requirement → story**, which is where documented features die: they are written in the docs and
+the PRD, no BACKLOG story ever owns them, and the executor delivers a subset that looks complete.
+(Seen in practice: features written in the business rules and in the PRD that no story cited
+were simply not built, and only users noticed.)
+
+```bash
+python3 scripts/spec_coverage.py \
+  --spec <workdir>/docs/07-business-rules.md \
+  --spec <workdir>/levelup/PRD-v2.md \
+  --backlog <workdir>/levelup/BACKLOG.md \
+  --out <workdir>/levelup --strict-acceptance
+```
+
+It fails (exit 1) on: a requirement no story cites (coverage is transitive — a story citing
+`P-DOC-1` covers the `BR-010` it derives from); a story citing no requirement; a story left
+undecomposed; and, with `--strict-acceptance`, a requirement without verifiable form.
+
+**Do not deliver the pack until it passes.** Fix by writing the missing story, adding the
+citation, splitting the story, or — only with a dated owner decision — descoping the requirement.
+Two conscious escape hatches exist and both must be *earned*: `[infra]` on a story that
+implements no product requirement (bootstrap, migration, cutover) and `[descritivo]` on a
+requirement that is context rather than behaviour.
+
+Write the requirements so this passes by construction:
+
+- **PRD requirements are testable.** `U-REL-1` style: state the behaviour and an explicit
+  `*Aceite:*` (or `QUANDO … DEVE …`). "Implementar X bem" is not a requirement.
+- **Stories are atomic.** No `(G)` and no "quebrar depois" survives into the delivered pack — an
+  epic marked for later decomposition is precisely where the executor improvises. Split until
+  each story has its own verifiable acceptance criterion.
+- **Every story cites its requirement ids** (`P-DOC-1…5`, `BR-020…023`, `U-SEC-1/2` — ranges and
+  slash-lists are understood).
 
 ### 6 · Parity check — verify the rebuild actually uses the whole model
 
@@ -259,6 +295,9 @@ the run (coverage %, and the classified orphan list) in `ASSESSMENT.md` or a `PA
   themes), or that they were skipped and why (step 0b).
 - EXECUTION-CONTRACT.md exists and its completeness gate references the clone's PARITY-MATRIX —
   the executor has no path to "done" that skips documented scope.
+- `spec_coverage.py --strict-acceptance` **passes** before delivery: every requirement has a story
+  that implements it, no story is orphan or undecomposed, every behavioural requirement is
+  testable. A pack that fails this gate is not delivered.
 - After a module is rebuilt, `scripts/parity_check.py` was run and **every** orphan table/column
   it reports is classified (used / deferred-with-reason / fixed) — no silent drops between the
   DATA-MODEL and the running code (step 6).
