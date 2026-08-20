@@ -1,221 +1,224 @@
 {
-  "_comment": "Bubble marketplace plugin ID -> display name. IDs are marketplace-global (same ID = same plugin in every app), so this cache is reusable across projects. Value forms: \"Name\" = known listed plugin; null = looked up but unavailable (delisted, name unknown); {\"name\": ..., \"author\": ..., \"delisted\": true} = object form; author is the seller display name. Resolve new IDs via the PUBLIC Data API: https://bubble.io/api/1.1/obj/plugin/<id> (name_text, owner_user, official_badge_boolean) -> /obj/user/<owner_user> (organization_custom_organization) -> /obj/organization/<org> (name_text = author). Works even when the marketplace page renders only the generic shell. Built-in short-name plugins (chartjs, apiconnector2, ...) are authored by Bubble. Keys starting with '_' are ignored.",
-  "1479901297703x967536405834891300": "Google Maps Extended",
-  "1479966626598x506484961070284800": "Twilio",
-  "1484327506287x474510747987607550": "SendGrid",
-  "1485666643051x310899126528114700": {
-    "name": "Random User Generator",
-    "author": "Zeroqode"
-  },
-  "1486333606381x563772386943434750": "Mailchimp Extended",
-  "1486351562130x708887586390409200": "Signature Pad",
-  "1488796042609x768734193128308700": "Toolbox",
-  "1494464159228x621608555717853200": "UNIX Converter",
-  "1494584598068x558733147672412200": null,
-  "1495642567089x595986733356023800": {
-    "name": "Air Date Time Picker",
-    "author": "Zeroqode"
-  },
-  "1497473108162x748255442121523200": {
-    "name": "Air Copy to clipboard",
-    "author": "Zeroqode"
-  },
-  "1498171554228x105618760361836540": {
-    "name": "Air Tooltip",
-    "author": "Zeroqode"
-  },
-  "1503656388355x494537099888295940": "Twilio - Send Text Messages",
-  "1504084136074x936250845148217300": "Calendar from Google",
-  "1506754440043x429432871224606700": "Zoom Meetings",
-  "1506856292688x472987456954695700": "Google Calendar + Offline",
-  "1515542335452x628730204959539200": {
-    "name": "Search & Autocorrect",
-    "author": "Zeroqode"
-  },
-  "1515740964274x743012569880985600": null,
-  "1517556357987x694745797757501400": "Data Converter Plugin",
-  "1518279603919x687476512969195500": "Air Keyboard Shortcut",
-  "1519170218471x969128757943861200": {
-    "name": "ViaCEP",
-    "author": "rico.wtf"
-  },
-  "1520432993679x332468722128912400": "User device type detector",
-  "1520524904151x890914947846373400": {
-    "name": "Brevo (formerly Sendinblue)",
-    "author": "Zeroqode"
-  },
-  "1525426707840x910405967468298200": "Google Drive Free",
-  "1525453812081x174875062776627200": "Repeating Group to CSV / XLSX",
-  "1526912550459x175937239475814400": "TabOpener",
-  "1527871417291x467091680897007600": "Instant text",
-  "1528945119672x548812376057577500": null,
-  "1530291303604x509439922948014100": null,
-  "1531024299355x489711521333772300": "Date/time range Selector",
-  "1531310660066x700901076712292400": {
-    "name": "Reveal & Hide Password",
-    "author": "Zeroqode"
-  },
-  "1532997348558x797819075821568000": "Excel Table / Data / Grid",
-  "1535398233486x238989697769013250": "PDF Filler",
-  "1539124824422x194279356396994560": {
-    "name": "File Downloader",
-    "author": "Airdev"
-  },
-  "1543169685024x571194097926930400": "Dropbox V2",
-  "1543937479653x604756044873203700": "RepeatingGroup Tools",
-  "1544798294930x973076470769909800": "Utilities ( bdk )",
-  "1546943753822x497344952358141950": "Auth0 User Login SSO OIDC SAML",
-  "1551365877078x445243110416449540": {
-    "name": "Date & Time Toolkit",
-    "author": "Balacode.io"
-  },
-  "1551944147648x791480255247810600": "Pdf Viewer Plugin",
-  "1552855100424x301332564720222200": "JavaScript Workflows",
-  "1553006094610x835866904531566600": "Fuzzy search & Autocomplete Plugin",
-  "1553183744528x903111989944909800": "Premium Charts Bundle - Chart JS",
-  "1557241599197x311227033793855500": null,
-  "1560987821766x453407966633394200": "Sweet Scrollbar",
-  "1562812673262x109396480465567740": {
-    "name": "Ultimate Toolkit",
-    "author": "Balacode.io"
-  },
-  "1567209674254x858786633827483600": "Emoji One Area Picker",
-  "1568299250417x684448291308175400": "Classify",
-  "1573478783306x235198545630593020": "DocSpring - Fill and Generate PDFs",
-  "1574978038763x786941160914944000": "ipiphy - IP Geolocation",
-  "1579120809486x684082880588546000": "Map - Leaflet",
-  "1580238841425x582072028873097200": "Rich Text Editor",
-  "1581699734631x493032970314317800": {
-    "name": "Satellite (reusable element addon)",
-    "author": "Zeroqode"
-  },
-  "1582601241392x653181519983018000": "1T - CSV Creator",
-  "1582624865073x914259503648079900": "Moosend Email Marketing API",
-  "1583999894901x139148699044937730": {
-    "name": "openToast",
-    "author": "Tinkso"
-  },
-  "1585612696870x563919365787090940": "Relative Positioner (float)",
-  "1586417026456x360184924969369600": "Simple progress bar",
-  "1586702961647x650466979361587200": "1T - Day of Week",
-  "1586808679781x640558628278370300": {
-    "name": "CPF/CNPJ Validator",
-    "author": "mequelussi (github)"
-  },
-  "1587954989912x631891328530645000": "1T - List of Dates",
-  "1592819039946x828679145915154400": "Sendinblue Contacts",
-  "1595777680752x644779389333798900": "Twilio Voice - In browser calls",
-  "1599995578736x177952455708377100": "Wonderful Image Slider",
-  "1602431280308x575669970275401700": {
-    "name": "Open URL in custom Window",
-    "author": "Zeroqode"
-  },
-  "1605135580930x311371110812221440": {
-    "name": "Scrollbar - Minimalist",
-    "delisted": true
-  },
-  "1609209698393x206083649188921340": "Barcode & QR Code Generator Plugin",
-  "1609444246883x924984661248573400": {
-    "name": "Better Input Validation Templates",
-    "author": "Not Quite Unicorns"
-  },
-  "1609741808612x465610886017450000": "Zoom API",
-  "1609955761273x917979328551059500": "Download, Save and Create File",
-  "1610512915958x681138150746095600": "Pathfix OAuth Connector",
-  "1610853886518x530204331045552100": "Guilded Webhooks",
-  "1610861756769x514842713965461500": "Merge PDF",
-  "1611675494488x867358412893061100": "Google Heatmap Layer",
-  "1612453140820x328809596850274300": "Mailchimp (OAuth)",
-  "1616505732428x765409544138915800": {
-    "name": "PWA Dynamic (Progressive Web App)",
-    "author": "Not Quite Unicorns"
-  },
-  "1617158035643x870588050789630000": "Zeroqode Toolbox",
-  "1617272982584x551488314916732900": "Intercom Complete API + Chat",
-  "1618831050749x230024566736683000": "Better Calendar Time Slots",
-  "1619408686811x303682060679381000": "Google Calendar",
-  "1620825535425x590103024753705000": "Add to calendar",
-  "1621953922170x687987145409298400": "Blog HTML WYSIWYG Editor TinyMCE",
-  "1626622188815x671954122902601700": "PDF Viewer Plugin",
-  "1627149818654x508797293775028200": "Google Drive API",
-  "1627220810267x534769642467754000": "QRcode-Generator Plugin",
-  "1628816507621x527883429883936800": {
-    "name": "File Uploader Bubble API",
-    "author": "Zeroqode"
-  },
-  "1629969174278x365092981307605000": "JSON Manipulator",
-  "1630165567096x291526050839265300": "Better Color Picker",
-  "1631494650490x682060150719119400": "Elements Slider",
-  "1631818528605x812939911340228600": "WB Export CSV / XLSX",
-  "1633100358403x239657077467774980": {
-    "name": "Better Timer/Stopwatch/Countdown",
-    "author": "Not Quite Unicorns"
-  },
-  "1633974317162x500585703210221600": "Print Html",
-  "1634450366879x496005256191672300": "Bubble Element to PDF",
-  "1636452512080x727372363131781100": null,
-  "1638520305392x764577321423470600": null,
-  "1642683387367x708220519175946200": {
-    "name": "Scrollbar Custom",
-    "author": "Not Quite Unicorns"
-  },
-  "1642860987916x663125148641001500": "Fuse Search (Fuzzy Search)",
-  "1642888144181x598360101501534200": "Gerar PDF / Imprimir",
-  "1643847782395x597625793912766500": "File & MultiFile Uploader",
-  "1645192423070x296607087026765800": {
-    "name": "Browser Device Information · BEP",
-    "author": "Not Quite Unicorns"
-  },
-  "1646064999757x815455456760954900": "1T - Input Watcher",
-  "1648430145817x673906689668022300": "Better PDF & Screenshot Exports",
-  "1650383044337x704199470234992600": null,
-  "1651636444081x933610778959544300": "List Sorter (Computed Values)",
-  "1655147053726x559413366743367700": {
-    "name": "CPF/CNPJ Validator",
-    "delisted": true
-  },
-  "1656156230536x298565765509152800": {
-    "name": "Charts and Graphs",
-    "author": "Zeroqode"
-  },
-  "1657326349552x520668215746232300": "Loaded Trigger",
-  "1658181838561x862832580805263400": "Circle Progress Bar",
-  "1658585318378x553742900542832600": "Swagger UI",
-  "1660943494581x605008264340176900": "Advanced WYSIWYG HTML editor Plugin",
-  "1661361917424x730967537700044800": "Serverside Variable",
-  "1662109776982x753933207177265200": "Video Meet - Jitsi",
-  "1662303925433x265192840966438900": "Local & Session Storage Manager",
-  "1667758971605x316889048071536640": "Xano Connector",
-  "1668592568219x992066942110007300": "Schedule Google Calendar Event",
-  "1668738737706x276760055182786560": "CSS Simple Style Editor",
-  "1670930264864x445277063097352200": "International phone input Plugin",
-  "1674005247729x181795081330884600": "JWT encode and decode",
-  "1674724169956x553440902986596350": "Workflow variables",
-  "1674902990308x318598041638010900": "IP Address to GeoLocation",
-  "1676280573614x891677842206097400": {
-    "name": "LottieFiles",
-    "author": "Bubble"
-  },
-  "1676907361630x802158243928080400": "ip address",
-  "1682579469490x402667891631063000": "Xano Migration Tools - Plan B",
-  "1687446439843x865924681433350100": "Supabase Pro Kit",
-  "1690219773500x932899701316911100": "Inverted Repeating Group",
-  "1691509762858x752107234800435200": "Export Table CSV",
-  "1696322224077x589893896350203900": "Export to XLSX(excel)",
-  "1703163619529x462557724589686800": {
-    "name": "Ez Phosphor Icons",
-    "author": "EazyCode"
-  },
-  "1703834865899x513748646578094100": null,
-  "1704805458220x398424779449958400": "JSON Toolkit",
-  "1741871936175x462856765532012540": {
-    "name": "Toast message for Native",
-    "author": "Idea Link"
-  },
-  "1741995636077x576101009929011200": "CSV to JSON",
-  "1750426862304x937629866616946700": "CSV Excel Export Pro",
-  "1751722385665x428788891768586200": "Yow-Color Extractor",
-  "1752262348634x353075330846556160": "Mobile App - Multi File Uploader",
-  "1756436554340x668226163446906900": "HTML Element (Mobile)",
-  "1759433016208x997641308276785200": "Simple Dropdown Bubble Mobile"
+ "1479901297703x967536405834891300": "Google Maps Extended",
+ "1479966626598x506484961070284800": "Twilio",
+ "1484327506287x474510747987607550": "SendGrid",
+ "1485666643051x310899126528114700": {
+  "author": "Zeroqode",
+  "name": "Random User Generator"
+ },
+ "1486333606381x563772386943434750": "Mailchimp Extended",
+ "1486351562130x708887586390409200": "Signature Pad",
+ "1488796042609x768734193128308700": "Toolbox",
+ "1494464159228x621608555717853200": "UNIX Converter",
+ "1494584598068x558733147672412200": null,
+ "1495642567089x595986733356023800": {
+  "author": "Zeroqode",
+  "name": "Air Date Time Picker"
+ },
+ "1497473108162x748255442121523200": {
+  "author": "Zeroqode",
+  "name": "Air Copy to clipboard"
+ },
+ "1498171554228x105618760361836540": {
+  "author": "Zeroqode",
+  "name": "Air Tooltip"
+ },
+ "1503656388355x494537099888295940": "Twilio - Send Text Messages",
+ "1504084136074x936250845148217300": "Calendar from Google",
+ "1506754440043x429432871224606700": "Zoom Meetings",
+ "1506856292688x472987456954695700": "Google Calendar + Offline",
+ "1515542335452x628730204959539200": {
+  "author": "Zeroqode",
+  "name": "Search & Autocorrect"
+ },
+ "1515740964274x743012569880985600": null,
+ "1517556357987x694745797757501400": "Data Converter Plugin",
+ "1518279603919x687476512969195500": "Air Keyboard Shortcut",
+ "1519170218471x969128757943861200": {
+  "author": "rico.wtf",
+  "name": "ViaCEP"
+ },
+ "1520432993679x332468722128912400": "User device type detector",
+ "1520524904151x890914947846373400": {
+  "author": "Zeroqode",
+  "name": "Brevo (formerly Sendinblue)"
+ },
+ "1525426707840x910405967468298200": "Google Drive Free",
+ "1525453812081x174875062776627200": "Repeating Group to CSV / XLSX",
+ "1526912550459x175937239475814400": "TabOpener",
+ "1527871417291x467091680897007600": "Instant text",
+ "1528945119672x548812376057577500": null,
+ "1530291303604x509439922948014100": null,
+ "1531024299355x489711521333772300": "Date/time range Selector",
+ "1531310660066x700901076712292400": {
+  "author": "Zeroqode",
+  "name": "Reveal & Hide Password"
+ },
+ "1532997348558x797819075821568000": "Excel Table / Data / Grid",
+ "1535398233486x238989697769013250": "PDF Filler",
+ "1539124824422x194279356396994560": {
+  "author": "Airdev",
+  "name": "File Downloader"
+ },
+ "1543169685024x571194097926930400": "Dropbox V2",
+ "1543937479653x604756044873203700": "RepeatingGroup Tools",
+ "1544798294930x973076470769909800": "Utilities ( bdk )",
+ "1546943753822x497344952358141950": "Auth0 User Login SSO OIDC SAML",
+ "1551365877078x445243110416449540": {
+  "author": "Balacode.io",
+  "name": "Date & Time Toolkit"
+ },
+ "1551944147648x791480255247810600": "Pdf Viewer Plugin",
+ "1552855100424x301332564720222200": "JavaScript Workflows",
+ "1553006094610x835866904531566600": "Fuzzy search & Autocomplete Plugin",
+ "1553183744528x903111989944909800": "Premium Charts Bundle - Chart JS",
+ "1557241599197x311227033793855500": null,
+ "1560987821766x453407966633394200": "Sweet Scrollbar",
+ "1562812673262x109396480465567740": {
+  "author": "Balacode.io",
+  "name": "Ultimate Toolkit"
+ },
+ "1567209674254x858786633827483600": "Emoji One Area Picker",
+ "1568299250417x684448291308175400": "Classify",
+ "1573478783306x235198545630593020": "DocSpring - Fill and Generate PDFs",
+ "1574978038763x786941160914944000": "ipiphy - IP Geolocation",
+ "1579120809486x684082880588546000": "Map - Leaflet",
+ "1580238841425x582072028873097200": "Rich Text Editor",
+ "1581699734631x493032970314317800": {
+  "author": "Zeroqode",
+  "name": "Satellite (reusable element addon)"
+ },
+ "1582601241392x653181519983018000": "1T - CSV Creator",
+ "1582624865073x914259503648079900": "Moosend Email Marketing API",
+ "1583999894901x139148699044937730": {
+  "author": "Tinkso",
+  "name": "openToast"
+ },
+ "1585612696870x563919365787090940": "Relative Positioner (float)",
+ "1586417026456x360184924969369600": "Simple progress bar",
+ "1586702961647x650466979361587200": "1T - Day of Week",
+ "1586808679781x640558628278370300": {
+  "author": "mequelussi (github)",
+  "name": "CPF/CNPJ Validator"
+ },
+ "1587954989912x631891328530645000": "1T - List of Dates",
+ "1592819039946x828679145915154400": "Sendinblue Contacts",
+ "1595777680752x644779389333798900": "Twilio Voice - In browser calls",
+ "1599995578736x177952455708377100": "Wonderful Image Slider",
+ "1602431280308x575669970275401700": {
+  "author": "Zeroqode",
+  "name": "Open URL in custom Window"
+ },
+ "1605135580930x311371110812221440": {
+  "delisted": true,
+  "name": "Scrollbar - Minimalist"
+ },
+ "1609209698393x206083649188921340": "Barcode & QR Code Generator Plugin",
+ "1609444246883x924984661248573400": {
+  "author": "Not Quite Unicorns",
+  "name": "Better Input Validation Templates"
+ },
+ "1609741808612x465610886017450000": "Zoom API",
+ "1609955761273x917979328551059500": "Download, Save and Create File",
+ "1610512915958x681138150746095600": "Pathfix OAuth Connector",
+ "1610853886518x530204331045552100": "Guilded Webhooks",
+ "1610861756769x514842713965461500": "Merge PDF",
+ "1611675494488x867358412893061100": "Google Heatmap Layer",
+ "1612453140820x328809596850274300": "Mailchimp (OAuth)",
+ "1616505732428x765409544138915800": {
+  "author": "Not Quite Unicorns",
+  "name": "PWA Dynamic (Progressive Web App)"
+ },
+ "1617158035643x870588050789630000": "Zeroqode Toolbox",
+ "1617272982584x551488314916732900": "Intercom Complete API + Chat",
+ "1618831050749x230024566736683000": "Better Calendar Time Slots",
+ "1619408686811x303682060679381000": "Google Calendar",
+ "1620825535425x590103024753705000": "Add to calendar",
+ "1621953922170x687987145409298400": "Blog HTML WYSIWYG Editor TinyMCE",
+ "1624266878789x498778585697091600": "Audio Player Full",
+ "1626622188815x671954122902601700": "PDF Viewer Plugin",
+ "1627149818654x508797293775028200": "Google Drive API",
+ "1627220810267x534769642467754000": "QRcode-Generator Plugin",
+ "1628816507621x527883429883936800": {
+  "author": "Zeroqode",
+  "name": "File Uploader Bubble API"
+ },
+ "1629969174278x365092981307605000": "JSON Manipulator",
+ "1630165567096x291526050839265300": "Better Color Picker",
+ "1631494650490x682060150719119400": "Elements Slider",
+ "1631818528605x812939911340228600": "WB Export CSV / XLSX",
+ "1631898919530x371869522674581500": "Better Audio Recorder",
+ "1633100358403x239657077467774980": {
+  "author": "Not Quite Unicorns",
+  "name": "Better Timer/Stopwatch/Countdown"
+ },
+ "1633974317162x500585703210221600": "Print Html",
+ "1634450366879x496005256191672300": "Bubble Element to PDF",
+ "1636452512080x727372363131781100": null,
+ "1638520305392x764577321423470600": null,
+ "1642683387367x708220519175946200": {
+  "author": "Not Quite Unicorns",
+  "name": "Scrollbar Custom"
+ },
+ "1642860987916x663125148641001500": "Fuse Search (Fuzzy Search)",
+ "1642888144181x598360101501534200": "Gerar PDF / Imprimir",
+ "1643847782395x597625793912766500": "File & MultiFile Uploader",
+ "1645192423070x296607087026765800": {
+  "author": "Not Quite Unicorns",
+  "name": "Browser Device Information · BEP"
+ },
+ "1646064999757x815455456760954900": "1T - Input Watcher",
+ "1648096184186x184646349307772930": "JSON Pretty Printer",
+ "1648430145817x673906689668022300": "Better PDF & Screenshot Exports",
+ "1650383044337x704199470234992600": null,
+ "1651636444081x933610778959544300": "List Sorter (Computed Values)",
+ "1655147053726x559413366743367700": {
+  "delisted": true,
+  "name": "CPF/CNPJ Validator"
+ },
+ "1656156230536x298565765509152800": {
+  "author": "Zeroqode",
+  "name": "Charts and Graphs"
+ },
+ "1657326349552x520668215746232300": "Loaded Trigger",
+ "1658181838561x862832580805263400": "Circle Progress Bar",
+ "1658585318378x553742900542832600": "Swagger UI",
+ "1660943494581x605008264340176900": "Advanced WYSIWYG HTML editor Plugin",
+ "1661361917424x730967537700044800": "Serverside Variable",
+ "1662109776982x753933207177265200": "Video Meet - Jitsi",
+ "1662303925433x265192840966438900": "Local & Session Storage Manager",
+ "1667758971605x316889048071536640": "Xano Connector",
+ "1668592568219x992066942110007300": "Schedule Google Calendar Event",
+ "1668738737706x276760055182786560": "CSS Simple Style Editor",
+ "1670930264864x445277063097352200": "International phone input Plugin",
+ "1674005247729x181795081330884600": "JWT encode and decode",
+ "1674724169956x553440902986596350": "Workflow variables",
+ "1674902990308x318598041638010900": "IP Address to GeoLocation",
+ "1676280573614x891677842206097400": {
+  "author": "Bubble",
+  "name": "LottieFiles"
+ },
+ "1676907361630x802158243928080400": "ip address",
+ "1682579469490x402667891631063000": "Xano Migration Tools - Plan B",
+ "1687446439843x865924681433350100": "Supabase Pro Kit",
+ "1690219773500x932899701316911100": "Inverted Repeating Group",
+ "1691509762858x752107234800435200": "Export Table CSV",
+ "1696322224077x589893896350203900": "Export to XLSX(excel)",
+ "1703163619529x462557724589686800": {
+  "author": "EazyCode",
+  "name": "Ez Phosphor Icons"
+ },
+ "1703834865899x513748646578094100": null,
+ "1704805458220x398424779449958400": "JSON Toolkit",
+ "1741871936175x462856765532012540": {
+  "author": "Idea Link",
+  "name": "Toast message for Native"
+ },
+ "1741995636077x576101009929011200": "CSV to JSON",
+ "1750426862304x937629866616946700": "CSV Excel Export Pro",
+ "1751722385665x428788891768586200": "Yow-Color Extractor",
+ "1752262348634x353075330846556160": "Mobile App - Multi File Uploader",
+ "1756436554340x668226163446906900": "HTML Element (Mobile)",
+ "1759433016208x997641308276785200": "Simple Dropdown Bubble Mobile",
+ "_comment": "Bubble marketplace plugin ID -> display name. IDs are marketplace-global (same ID = same plugin in every app), so this cache is reusable across projects. Value forms: \"Name\" = known listed plugin; null = looked up but unavailable (delisted, name unknown); {\"name\": ..., \"author\": ..., \"delisted\": true} = object form; author is the seller display name. Resolve new IDs via the PUBLIC Data API: https://bubble.io/api/1.1/obj/plugin/<id> (name_text, owner_user, official_badge_boolean) -> /obj/user/<owner_user> (organization_custom_organization) -> /obj/organization/<org> (name_text = author). Works even when the marketplace page renders only the generic shell. Built-in short-name plugins (chartjs, apiconnector2, ...) are authored by Bubble. Keys starting with '_' are ignored."
 }
