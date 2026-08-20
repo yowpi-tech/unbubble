@@ -108,7 +108,11 @@ Deliver `TARGET-ARCHITECTURE.md`:
   wants Markdown as the canonical content — if so, plan the HTML→Markdown conversion in the
   migration (archive the original HTML) and render Markdown→HTML server-side for any PDF pipeline.
 - Integration map: every external API/plugin-service from the clone docs → how the new system
-  talks to it (direct SDK, webhook, queue) and which credentials must be re-issued.
+  talks to it (direct SDK, webhook, queue) and its credentials plan. The working values were
+  already preserved by the clone step in `<workdir>/secrets/.env` (map: `secrets/ENV-KEYS.md`)
+  — decide per integration **reuse** (same account/key, renamed to the new stack's var) vs
+  **re-issue** (new key, e.g. scoped/rotated), and record the old→new var mapping so the
+  executor configures the secret store without hunting. Never copy values into the pack.
 - **Plugin translation policy (standing owner decision):** plugins that provide FRONTEND
   functionality (editors, toasts, icons, masks/validation, QR rendering, JS utils…) are rebuilt
   as **native code** in the new stack — turn each one (from `03-plugins.md`) into a build task;
@@ -154,8 +158,10 @@ the checklist):
   `/api/1.1/obj/<type>` with a **Modified Date cursor**: preserves the Bubble `unique id` (keep
   it as `bubble_id` column for traceability + FK resolution), supports incremental delta sync,
   enables **dual-run** and a low-downtime cutover. Requires enabling Data API + an API token —
-  scope it read-only and to the tables being migrated; note privacy rules DO apply to API
-  tokens' visibility unless configured otherwise.
+  the app's existing tokens are already preserved as `BUBBLE_API_TOKEN_*` in
+  `<workdir>/secrets/.env` (see `ENV-KEYS.md`); still prefer issuing a fresh token scoped
+  read-only and to the tables being migrated. Note privacy rules DO apply to API tokens'
+  visibility unless configured otherwise.
 
 Also cover: file/S3 asset migration (Bubble-hosted files must be downloaded and re-uploaded),
 option-set values → enum seed data, ordering of tables by FK dependency, **validation &
@@ -210,6 +216,11 @@ minimum:
    listed deviation (what, why, impact) requiring the owner's dated sign-off — dropping a
    documented item silently is a contract violation, and "the AI decided it was unnecessary" is
    not a valid disposition.
+5. **Secrets rule**: integration credentials come from the clone's `<workdir>/secrets/.env`,
+   mapped old→new by `secrets/ENV-KEYS.md` + the integration map — configure them in the new
+   system's secret store / env, never hardcode, never commit `.env` (commit `.env.example`
+   instead), and never print values in logs, chats, or docs. Keys marked re-issue/rotate in the
+   integration map must be replaced before go-live.
 
 ### 5c · Spec-coverage gate — no requirement without an executor (run BEFORE delivering)
 
@@ -295,6 +306,9 @@ the run (coverage %, and the classified orphan list) in `ASSESSMENT.md` or a `PA
   themes), or that they were skipped and why (step 0b).
 - EXECUTION-CONTRACT.md exists and its completeness gate references the clone's PARITY-MATRIX —
   the executor has no path to "done" that skips documented scope.
+- The integration map covers every var group in the clone's `secrets/ENV-KEYS.md` with a
+  reuse/re-issue decision and an old→new mapping (unused-in-app keys may be dropped with a note);
+  no credential value appears in the pack.
 - `spec_coverage.py --strict-acceptance` **passes** before delivery: every requirement has a story
   that implements it, no story is orphan or undecomposed, every behavioural requirement is
   testable. A pack that fails this gate is not delivered.

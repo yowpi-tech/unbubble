@@ -6,10 +6,13 @@ description: >
   (tables, fields, relationships, option sets, privacy rules), EXTERNAL APIs (API Connector
   providers, endpoints, auth, which are in use), PLUGINS (purpose, which hold API keys, which
   external service each talks to), DATA API exposure (which tables/methods are public),
-  BACKEND WORKFLOWS (exposed endpoints vs internally-scheduled, the logic of each), and PAGES
+  BACKEND WORKFLOWS (exposed endpoints vs internally-scheduled, the logic of each), PAGES
   & REUSABLES (what the system does, the business rules implemented in each workflow — the
-  as-is state). Use WHENEVER the user hands you a .bubble export and asks to document the app,
-  understand it, extract its schema/APIs/logic, or produce a PRD/spec to rebuild or clone it:
+  as-is state), and CREDENTIAL PRESERVATION (every API key/private config value from
+  settings.secure extracted by script into secrets/.env + ENV-KEYS.md so the rebuild agent
+  can configure the new system later — keys are never lost). Use WHENEVER the user hands you
+  a .bubble export and asks to document the app, understand it, extract its schema/APIs/logic,
+  pull its API keys into a .env, or produce a PRD/spec to rebuild or clone it:
   "document this Bubble app", "documentação técnica do app", "o que esse sistema faz", "regras
   de negócio", "clonar o sistema", "PRD para recriar", "reverse engineer", "as-is", "levantar
   requisitos do Bubble". Step 2 of the UnBubble pipeline — ideally run on the LEAN re-export
@@ -31,19 +34,35 @@ criticize the architecture here — that is `level-up`'s job. Record smells you 
 
 **`<workdir>` is the project folder** `~/UnBubble-Projects/<app-id>/` (same folder the audit
 uses; create it if this is the first step run for the app). Everything this skill emits lives
-there: `inventory/`, `docs/`, `PRD-clone.md`, `PARITY-MATRIX.md`.
+there: `inventory/`, `secrets/`, `docs/`, `PRD-clone.md`, `PARITY-MATRIX.md`.
 
 ## Workflow
 
-### 1 · Extract the inventory (deterministic)
+### 1 · Extract the inventory + preserve the credentials (deterministic)
 
 ```bash
 python3 scripts/bubble_inventory.py "path/to/export.bubble" --outdir <workdir>/inventory
+python3 scripts/bubble_secrets.py   "path/to/export.bubble" --outdir <workdir>/secrets
 ```
 
-Dependency-free (Python 3.8+). Emits nine JSON files and prints a summary. Read
-`summary.json` first — it has counts and **security flags** (endpoints without auth,
-endpoints ignoring privacy rules) you must surface in the docs.
+Both are dependency-free (Python 3.8+). The inventory emits nine JSON files and prints a
+summary. Read `summary.json` first — it has counts and **security flags** (endpoints without
+auth, endpoints ignoring privacy rules) you must surface in the docs.
+
+`bubble_secrets.py` is NOT optional: the export is often the only place the app's API keys
+still exist, and the inventory deliberately redacts them — without this step they are lost.
+It preserves every credential/private config value (settings.secure: named service keys,
+the API Connector private auth/params, plugin secure keys, Bubble Data-API tokens, OAuth
+apps, mobile signing; plus plugin client-safe config) into:
+
+| File | Contents |
+|---|---|
+| `secrets/.env` | every value, commented with its export path — **live credentials**, chmod 600, gitignored; you never open it |
+| `secrets/.env.example` | same vars blanked — safe to commit in the rebuild repo |
+| `secrets/ENV-KEYS.md` | the map var ↔ export path ↔ service ↔ test/live ↔ in-use (no values) — **this** is what you read and cite |
+
+The script prints a leaf-accounting line and exits non-zero if any secure value escaped
+extraction — if it fails, stop and investigate before proceeding.
 
 | File | Contents |
 |---|---|
@@ -92,9 +111,10 @@ docs/
   01-database.md            per table: purpose, fields table, relationships (mermaid erDiagram),
                             option sets used, privacy rules, Data-API exposure
   02-external-apis.md       per provider: what it's for, auth type, calls table (method, URL,
-                            used?), which workflows/pages invoke it
-  03-plugins.md             per plugin: purpose, external service, holds API keys? (key NAMES),
-                            where used, marketplace link
+                            used?), which workflows/pages invoke it, and the ENV VAR names
+                            holding its credentials (from secrets/ENV-KEYS.md)
+  03-plugins.md             per plugin: purpose, external service, holds API keys? (the ENV
+                            VAR names from secrets/ENV-KEYS.md), where used, marketplace link
   04-data-api.md            switches, exposed tables, what privacy rules imply for each,
                             security notes (from summary.security_flags)
   05-backend-workflows.md   endpoints (external contract) vs internal jobs; per WF: trigger,
@@ -154,7 +174,8 @@ Classify every installed plugin as one of:
   QR/barcode rendering, JS utilities…) — in the rebuild these are **replaced by own code**.
   Document the observable behavior to reproduce; never propose "an equivalent plugin".
 - **External-service integration** (talks to an outside API and/or holds credentials) — document
-  the service and key NAMES; the keep × replace decision belongs to level-up's integration map.
+  the service and the ENV VAR names from `secrets/ENV-KEYS.md` (the values themselves are already
+  preserved in `secrets/.env`); the keep × replace decision belongs to level-up's integration map.
 
 ### 4 · Generate the clone PRD
 
@@ -166,8 +187,10 @@ platform. Structure:
 3. **Functional requirements** — per module, referencing BR-xxx business rules; every exposed
    endpoint and Data-API table is a requirement (external consumers may exist).
 4. **Data model** — the as-is schema (tables/fields/option sets) as the contract to reproduce.
-5. **Integrations** — every external API + plugin-service the clone must reconnect (with the
-   key NAMES that will need new credentials).
+5. **Integrations** — every external API + plugin-service the clone must reconnect. Cite the
+   ENV VAR names per integration and state that the working values are preserved in
+   `<workdir>/secrets/.env` (mapped by `ENV-KEYS.md`) — the rebuild configures from there
+   instead of hunting for credentials.
 6. **Parity checklist** — a testable list: pages/flows, endpoints, automations (DB triggers,
    recurring), reports/exports.
 7. **Out of scope / deferred to level-up** — architecture choices, migration, UX changes.
@@ -201,15 +224,27 @@ this). A dispositionless row means the clone missed something — go back before
 
 ### Secrets & PII hygiene (non-negotiable)
 
-`settings.secure` holds LIVE API keys and `raw_data` on endpoints can hold real user data. The
-inventory script already redacts these — **never** open those export sections to "complete"
-the docs with actual values, and never paste any credential-looking string into the docs. Key
-NAMES yes, values never. Treat the inventory dir + docs as internal material.
+`settings.secure` holds LIVE API keys and `raw_data` on endpoints can hold real user data.
+The division of labor is strict:
+
+- **Values are preserved exactly once, by script**: `bubble_secrets.py` → `secrets/.env`
+  (chmod 600, gitignored). That file is for the future rebuild agent's configuration step —
+  **you never open, cat, print, or quote it**, and you never open the raw `settings.secure` /
+  `raw_data` sections either. If the script failed, fix the script run; never extract values
+  by hand.
+- **Docs carry names, never values**: reference env VAR names via `secrets/ENV-KEYS.md`
+  (safe to read — names, paths and lengths only). No credential-looking string ever appears
+  in inventory JSONs, docs, the PRD, chat, or commits.
+- Treat the whole `<workdir>` as internal material; `secrets/.env` additionally must never
+  leave the machine (no cloud sync, no attachments, no artifacts).
 
 ## Quality bar
 
 - Every active table and field appears in `01-database.md`; every provider call in
   `02-external-apis.md` (marked used/unused); every exposed endpoint in `05-…` with params.
+- `secrets/.env` + `ENV-KEYS.md` exist (bubble_secrets.py ran and its leaf accounting passed);
+  every integration in `02-…`/`03-…` and in PRD §Integrations cites its ENV VAR names; no
+  credential value appears anywhere outside `secrets/.env`.
 - Workflows are described as **rules in plain language**, not action-type lists.
 - Every behavioural BR-xxx is in verifiable form (`QUANDO … DEVE …` + `Aceite:`); purely
   descriptive ones are marked `[descritivo]`. The level-up gate checks this.

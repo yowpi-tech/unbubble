@@ -18,9 +18,11 @@ UX). The Bubble→modern translation table and the migration decision matrix are
 - [ ] **Role model** — how are roles stored? (Bubble typical: text field / option set on User,
       checked in page conditionals). Flag anything client-enforced. Note sentinel values shared
       across users (e.g. one shared ADMIN code for a whole team = no per-user accountability).
-- [ ] **Secrets** — plugins/API-connector with keys (`plugins.json.secure_key_names`,
-      `api_connector.json.auth`): where will these live in the new system (vault/env)? Any key
-      visible client-side in Bubble (client_safe config) must be rotated at migration.
+- [ ] **Secrets** — plugins/API-connector with keys: the full inventory is the clone's
+      `secrets/ENV-KEYS.md` (var ↔ service ↔ in-use; values live only in `secrets/.env`).
+      Where will each live in the new system (vault/env)? Any key visible client-side in
+      Bubble (the ENV-KEYS "client-safe" section) must be rotated at migration; keys of
+      unused providers/plugins are drop candidates.
 - [ ] **PII inventory** — which tables hold personal data (emails, SSN-like, licenses)? LGPD:
       retention, deletion capability (Bubble soft-delete patterns), export capability.
 - [ ] **Audit trail** — does the app log who changed what? (Bubble: usually Modified By only.)

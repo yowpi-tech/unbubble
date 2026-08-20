@@ -29,6 +29,8 @@ API-call parameter VALUES are omitted (names + private flag only); URLs and body
 templates are masked for secret-looking query params. APIEvent raw_data (may contain
 real PII samples) is omitted. The output is safe to hand to a documentation model,
 but still lists ENDPOINT names/paths — treat the inventory directory as internal.
+Credential VALUES are preserved separately by the companion bubble_secrets.py
+(-> <workdir>/secrets/.env) so they are not lost — run BOTH scripts (see SKILL.md).
 
 Dependency-free (Python 3.8+ stdlib). Usage:
   python3 bubble_inventory.py path/to/export.bubble [--outdir DIR] [--plugin-names FILE]
@@ -215,7 +217,7 @@ def inv_api_connector(data, content_raw):
             ref_action = '"apiconnector2-%s.%s"' % (aid, cid)
             ref_data = '"apiconnector2.%s.%s"' % (aid, cid)
             params = []
-            for pgroup in ('url_params', 'body_params', 'headers'):
+            for pgroup in ('url_params', 'body_params', 'headers', 'params'):
                 pg = call.get(pgroup)
                 if isinstance(pg, dict):
                     for pv in pg.values():
@@ -268,8 +270,9 @@ def inv_data_api(data, db):
             'exposed_types': exposed,
             'note': ('Data API root: https://<domain>/api/1.1/obj/<type> ; Workflow API root: '
                      'https://<domain>/api/1.1/wf/<endpoint>. Per-type allowed operations are '
-                     'governed by privacy rules (see database.json privacy_rules) and API tokens '
-                     'configured in the Bubble editor (not present in the export).')}
+                     'governed by privacy rules (see database.json privacy_rules) and API tokens. '
+                     'The tokens themselves live in settings.secure.api_tokens and are preserved '
+                     'by bubble_secrets.py into <workdir>/secrets/.env (BUBBLE_API_TOKEN_*).')}
 
 def inv_backend(data):
     folders = ((data.get('settings') or {}).get('client_safe') or {}).get('api_wf_folder_list') or {}
@@ -544,6 +547,11 @@ def main():
     log('  Pages       : %d   Reusables: %d' % (c['pages'], c['reusables']))
     if summary['security_flags']['endpoints_without_auth']:
         log('  ⚠ endpoints WITHOUT auth: %d' % len(summary['security_flags']['endpoints_without_auth']))
+    n_secure = len((data.get('settings') or {}).get('secure') or {})
+    if n_secure:
+        log('  ⚠ settings.secure holds %d entries (API keys/credentials) NOT extracted here —'
+            % n_secure)
+        log('    run bubble_secrets.py to preserve them into <workdir>/secrets/.env (see SKILL.md).')
     log('\nInventory -> %s' % outdir)
 
 if __name__ == '__main__':
