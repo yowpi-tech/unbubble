@@ -18,3 +18,18 @@ this repo, and `secrets/.env` never leaves the machine.
 
 Scripts are dependency-free Python 3.8+ (stdlib only). The canonical `.bubble` export reference
 model lives in `skills/audit/references/reference-model.md`.
+
+## Local console (`ui/`)
+
+A small Next.js app that tracks every project in `~/UnBubble-Projects/`: audit rounds and
+remaining findings, the clone documentation checklist (docs, PRD, parity matrix, open questions),
+the level-up pack + `spec_coverage` gate, and backlog stories ticked off as the rebuild lands. It
+also shows where the skills are installed on the machine (Claude Code, Codex, other agents) and
+has a 4-step onboarding for newcomers.
+
+```bash
+cd ui && npm install && npm run dev     # http://localhost:3333
+```
+
+No database: the console derives everything from the files the skills write and keeps its own
+state in `<project>/unbubble.json`. Details in [`ui/README.md`](ui/README.md).

@@ -3,3 +3,7 @@
 __pycache__/
 *.pyc
 .DS_Store
+ui/node_modules/
+ui/.next/
+ui/next-env.d.ts
+ui/*.tsbuildinfo
