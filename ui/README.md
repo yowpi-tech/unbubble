@@ -64,19 +64,13 @@ Markdown, not MDX).
 
 ## Adding a language
 
-Translations live in `src/lib/i18n/locales/`, one file per language, and are listed in
-`src/lib/i18n/index.ts`. English is the reference dictionary; anything a locale leaves out falls
-back to it.
-
-1. Copy `src/lib/i18n/locales/en.ts` to, for example, `es.ts` and translate the values (keep the
-   keys and the `{placeholders}`). Declare it as `Dictionary` for a complete translation or
-   `Partial<Dictionary>` while you are still translating.
-2. In `src/lib/i18n/index.ts`, import it and append an entry to `LOCALES`:
-   ```ts
-   { code: 'es', label: 'Español', tag: 'es', matches: ['es'], dictionary: es },
-   ```
-3. Done. The language menu in the header, the cookie, `<html lang>`, date formatting and the
-   Accept-Language detection all read that list.
+The console ships in English, Português (Brasil) and Español. Translations live in
+`src/lib/i18n/locales/`, one file per language, registered in `src/lib/i18n/index.ts`; English is
+the reference dictionary and anything a locale leaves out falls back to it. The step-by-step
+recipe, written so an LLM can follow it, is the **Languages** chapter of the
+[root README](../README.md#languages): copy `locales/en.ts`, translate the values (keep keys,
+placeholders and product terms), append one entry to `LOCALES`, run `tsc` + `eslint`, check the
+menu.
 
 ## Logo animation
 

@@ -9,6 +9,7 @@
  * back to English.
  */
 import { en, type Dictionary, type TKey } from './locales/en';
+import { es } from './locales/es';
 import { pt } from './locales/pt';
 
 export type { Dictionary, TKey };
@@ -28,7 +29,7 @@ export interface LocaleDefinition {
 export const LOCALES: LocaleDefinition[] = [
   { code: 'en', label: 'English', tag: 'en', matches: ['en'], dictionary: en },
   { code: 'pt', label: 'Português (Brasil)', tag: 'pt-BR', matches: ['pt'], dictionary: pt },
-  // { code: 'es', label: 'Español', tag: 'es', matches: ['es'], dictionary: es },
+  { code: 'es', label: 'Español', tag: 'es', matches: ['es'], dictionary: es },
 ];
 
 export const DEFAULT_LOCALE = 'en';
