@@ -1156,8 +1156,12 @@ def load_state(path):
     if path.lower().endswith('.json'):
         try:
             j = json.loads(txt)
-            arr = j if isinstance(j, list) else j.get('deleted', [])
-            return set(arr)
+            if isinstance(j, list):
+                return set(j)
+            keys = set(j.get('deleted', []))
+            # v2 files: section sign-offs travel as 'section:<id>' keys so the report re-checks them
+            keys.update('section:' + str(k) for k in j.get('sections_done', []))
+            return keys
         except Exception:
             return set()
     return set(re.findall(r'-\s*\[[xX]\]\s*`([^`]+)`', txt))  # only checked (- [x]) lines
@@ -1223,6 +1227,11 @@ STR = {
   'trk_export_json': '⬇ .json', 'trk_import': '⬆ Importar', 'trk_clear': 'Limpar',
   'md_hint': 'As chaves entre crases sao de maquina — edite os checkboxes, nao as chaves. Reimporte este arquivo ou passe-o em bubble_audit.py --state.',
   'clear_confirm': 'Limpar todas as marcacoes de exclusao?',
+  'sec_done': 'Auditoria desta seção concluída',
+  'sec_done_t': 'Marque quando a seção estiver revisada. Itens não excluídos ficam registrados como mantidos de propósito, e a etapa de clone vai perguntar se entram na paridade.',
+  'sec_done_pill': '✓ seção concluída', 'kept_tag': 'mantido', 'trk_sections': 'seções concluídas',
+  'sync_saved': '● salvo no console', 'sync_saving': '● salvando…', 'sync_err': '● falha ao salvar no console', 'sync_ready': '● console conectado',
+  'md_kept': 'mantido de propósito',
   'nv_p': 'Páginas', 'nv_r': 'Reutilizáveis', 'nv_b': 'Backend WF', 'nv_o': 'Option Sets',
   'nv_ap': 'APIs',
   's_api': '9 · API Connector — endpoints declarados sem uso',
@@ -1357,6 +1366,11 @@ STR = {
   'trk_export_json': '⬇ .json', 'trk_import': '⬆ Import', 'trk_clear': 'Clear',
   'md_hint': 'Backticked keys are machine-readable — edit the checkboxes, not the keys. Re-import this file or pass it to bubble_audit.py --state.',
   'clear_confirm': 'Clear all deletion marks?',
+  'sec_done': 'Audit of this section complete',
+  'sec_done_t': 'Tick when the section is reviewed. Items not deleted are recorded as kept on purpose, and the clone step will ask whether they enter parity.',
+  'sec_done_pill': '✓ section complete', 'kept_tag': 'kept', 'trk_sections': 'sections complete',
+  'sync_saved': '● saved to console', 'sync_saving': '● saving…', 'sync_err': '● could not save to console', 'sync_ready': '● console connected',
+  'md_kept': 'kept on purpose',
   'nv_p': 'Pages', 'nv_r': 'Reusables', 'nv_b': 'Backend WF', 'nv_o': 'Option Sets',
   'nv_ap': 'APIs',
   's_api': '9 · API Connector — declared endpoints never used',
@@ -1469,6 +1483,13 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
         return (f"<td class='cellchk'><input type='checkbox' class='delchk' "
                 f'data-key="{esc(key)}" data-label="{esc(label)}"></td>')
     del_h = f"<th class='cellchk'>{T['th_del']}</th>"
+
+    # section sign-off: "this section is audited" even when some items are deliberately kept
+    def sech(sid, title):
+        return (f'<h2 id="{sid}" class="sec"><span>{title}</span>'
+                f"<label class='secdone' title=\"{esc(T['sec_done_t'])}\">"
+                f"<input type='checkbox' class='secchk' data-sec='{sid}'> {T['sec_done']}</label>"
+                f"<span class='secpill'>{T['sec_done_pill']}</span></h2>")
 
     # every category renders a green all-clear note when the audit found nothing in it
     def all_clear(msg):
@@ -1813,6 +1834,13 @@ td a{{color:var(--accent);text-decoration:none}}td a:hover{{text-decoration:unde
 .swatch{{display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid var(--line);vertical-align:-2px}}h4{{color:var(--ink)}}
 .cellchk{{text-align:center;width:1%;white-space:nowrap}}.delchk{{width:16px;height:16px;cursor:pointer;accent-color:var(--accent)}}
 tr.done td:not(.cellchk){{opacity:.4;text-decoration:line-through}}
+h2.sec{{display:flex;align-items:center;flex-wrap:wrap;gap:10px}}
+.secdone{{font-size:12.5px;font-weight:500;color:var(--dim);cursor:pointer;display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:20px;padding:3px 10px;background:var(--card);white-space:nowrap}}
+.secdone input{{width:15px;height:15px;accent-color:var(--green);cursor:pointer;margin:0}}
+.secpill{{display:none;font-size:12px;font-weight:600;color:var(--green);background:var(--greenbg);border-radius:20px;padding:3px 10px;white-space:nowrap}}
+h2.secok .secpill{{display:inline-block}}h2.secok .secdone{{border-color:var(--green);color:var(--green)}}
+tr.kept td:not(.cellchk){{font-style:italic;color:var(--dim)}}.kepttag{{display:block;font-size:10.5px;font-weight:600;color:var(--orange);margin-top:2px}}
+#syncstate{{font-size:12px;color:var(--dim)}}#syncstate.ok{{color:var(--green)}}#syncstate.err{{color:var(--red)}}
 .tracker{{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:9px 13px;margin:16px 0;box-shadow:var(--shadow)}}
 .tracker .prog{{font-weight:700;font-variant-numeric:tabular-nums}}.tracker .sp{{flex:1}}
 .tracker button,.tracker .btn{{cursor:pointer;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:8px;padding:5px 11px;font-size:12.5px}}
@@ -1826,7 +1854,9 @@ tr.done td:not(.cellchk){{opacity:.4;text-decoration:line-through}}
 <div class="toc"><a href="#p">1 · {T['nv_p']}</a><a href="#r">2 · {T['nv_r']}</a><a href="#b">3 · {T['nv_b']}</a><a href="#o">4 · {T['nv_o']}</a><a href="#pl">5 · {T['nv_pl']}</a><a href="#s">6 · {T['nv_s']}</a><a href="#d">7 · {T['nv_d']}</a><a href="#w">8 · {T['nv_w']}</a><a href="#ap">9 · {T['nv_ap']}</a><a href="#g">10 · {T['nv_g']}</a><a href="#m">{T['nv_m']}</a></div>
 <div class="tracker">
 <span class="prog"><span id="delcount">0 / 0</span></span><span class="bar"><i id="delbar"></i></span>
-<span class="dim">{T['trk_hint']}</span><span class="sp"></span>
+<span class="dim">{T['trk_hint']}</span>
+<span class="prog"><span id="seccount">0 / 0</span></span><span class="dim">{T['trk_sections']}</span>
+<span id="syncstate"></span><span class="sp"></span>
 <button onclick="exportProgress('md')" title="{T['trk_export_md_t']}">{T['trk_export_md']}</button>
 <button onclick="exportProgress('json')">{T['trk_export_json']}</button>
 <label class="btn">{T['trk_import']}<input type="file" accept=".md,.markdown,.json,text/markdown,application/json" style="display:none" onchange="importProgress(this.files[0]);this.value=''"></label>
@@ -1850,16 +1880,16 @@ tr.done td:not(.cellchk){{opacity:.4;text-decoration:line-through}}
 <div class="card k-red"><div class="big">{len(gh['refs'])}</div><div class="lab">{T['c_ghost']}</div><div class="of">{gh['plugin_count']} plugins removidos</div></div>
 </div>
 
-<h2 id="p">{T['s_pages']}</h2><p class="q">{T['q_pages']}</p>
+{sech('p', T['s_pages'])}<p class="q">{T['q_pages']}</p>
 {pages_block}
 {mob_block}
 
-<h2 id="r">{T['s_reuse']}</h2><p class="q">{T['q_reuse']}</p>
+{sech('r', T['s_reuse'])}<p class="q">{T['q_reuse']}</p>
 {reuse_block}
 {('<h3>+ '+str(len(reuse_trans))+' transitive</h3>'+reuse_tbl_t) if reuse_trans else ''}
 {('<h3>'+T['dup_reuse_t']+' ('+str(len(reuse_dup))+')</h3><div class="note note-amber">'+T['dup_reuse_b']+'</div>'+reuse_tbl_dup) if reuse_dup else ''}
 
-<h2 id="b">{T['s_back']}</h2><p class="q">{T['q_back']}</p>
+{sech('b', T['s_back'])}<p class="q">{T['q_back']}</p>
 <p>{T['back_body']}</p>
 <div class="cards"><div class="card k-red"><div class="big">{len(back_hard)}</div><div class="lab">{T['direct']}</div></div>
 <div class="card k-orange"><div class="big">{len(back_trans)}</div><div class="lab">{T['trans']}</div></div>
@@ -1868,29 +1898,29 @@ tr.done td:not(.cellchk){{opacity:.4;text-decoration:line-through}}
 {back_wh_block}
 <h3>3b · {T['wf_bce_t']} ({len(wf['backend_ce'])})</h3><p class="dim">{T['wf_bce_b']}</p>{wf_bce_tbl}
 
-<h2 id="o">{T['s_opt']}</h2><p class="q">{T['q_opt']}</p>
+{sech('o', T['s_opt'])}<p class="q">{T['q_opt']}</p>
 <p>{len(opt_unused)} / {len(opt)} ({opt_deleted} {T['already_deleted']}). {T['opt_body']}</p>{opt_tbl}
 
-<h2 id="pl">{T['s_plug']}</h2><p class="q">{T['q_plug']}</p>
+{sech('pl', T['s_plug'])}<p class="q">{T['q_plug']}</p>
 {('<div class="note note-red"><strong>💲 '+str(len(unused_paid))+' '+T['plug_paid_alert']+'</strong><ul>'+''.join('<li><strong>'+esc(p['name'] or p['id'])+'</strong>'+((' — '+esc(p['price'])) if p.get('price') else '')+((' ('+esc(p['pricing_model'])+')') if p.get('pricing_model') else '')+'</li>' for p in unused_paid)+'</ul></div>') if unused_paid else ''}
 <p><strong>{plug_used}</strong>/{plug_total} {T['plug_used']}</p>
 <h3>{T['plug_orphan_t']} ({len(plug_orphan)})</h3><p class="dim">{T['plug_orphan_b']}</p>{plug_orphan_tbl}
 <h3>{T['plug_cfg_t']} ({len(plug_cfg)})</h3>{plug_cfg_block}
 <h3>{T['plug_used_t']} ({len(plug_used_rows)})</h3><p class="dim">{T['plug_used_b']}</p>{plug_used_tbl}
 
-<h2 id="s">{T['s_sty']}</h2><p class="q">{T['q_sty']}</p>
+{sech('s', T['s_sty'])}<p class="q">{T['q_sty']}</p>
 <p>{len(sty_unused)} / {len(sty)}. {T['sty_body']}</p>{sty_tbl}
 <h3>{T['s_var']}</h3><p class="dim">{T['var_body']}</p>
 <h4 style="margin:16px 0 6px;font-size:14px">{T['var_colors_h']} ({len(vcolors['unused'])}) · <span class="dim" style="font-weight:400">{T['var_stat'] % (vcolors['active'], vcolors['deleted'])}</span></h4>{colorvar_tbl}
 <h4 style="margin:16px 0 6px;font-size:14px">{T['var_fonts_h']} ({len(vfonts['unused'])}) · <span class="dim" style="font-weight:400">{T['var_stat'] % (vfonts['active'], vfonts['deleted'])}</span></h4>{fontvar_tbl}
 
-<h2 id="d">{T['s_dt']}</h2><p class="q">{T['q_dt']}</p>
+{sech('d', T['s_dt'])}<p class="q">{T['q_dt']}</p>
 <div class="note note-blue">{dtF['deleted']} {T['dt_deleted_note']} {dtT['deleted']} {T['dt_tables_deleted']} {dtT['exposed']} {T['dt_exposed_tables']}</div>
 <h3>{T['dt_tables_t']} ({len(dtT['unused'])})</h3><p class="dim">{T['dt_tables_b']}</p>{dt_tables_tbl}
 <h3>{T['dt_fields_t']} ({n_fcand})</h3><p>{T['dt_fields_b']}</p>
 {dt_fields_block}
 
-<h2 id="w">{T['s_wf']}</h2><p class="q">{T['q_wf']}</p>
+{sech('w', T['s_wf'])}<p class="q">{T['q_wf']}</p>
 <h3>{T['wf_ce_t']} ({len(wf['page_ce'])})</h3><p class="dim">{T['wf_ce_b']}</p>
 <div class="scroll">{wf_ce_tbl}</div>
 <h3>{T['wf_orphan_t']} ({len(wf['orphan'])})</h3><p class="dim">{T['wf_orphan_b']}</p>
@@ -1898,11 +1928,11 @@ tr.done td:not(.cellchk){{opacity:.4;text-decoration:line-through}}
 <h3>{T['wf_hidden_t']} ({len(wf['hidden'])})</h3>
 {wf_hidden_block}
 
-<h2 id="ap">{T['s_api']}</h2><p class="q">{T['q_api']}</p>
+{sech('ap', T['s_api'])}<p class="q">{T['q_api']}</p>
 <p><strong>{len(apc['unused'])}</strong> / {apc['total']}. {T['api_body']}</p>
 {api_tbl}
 
-<h2 id="g">{T['s_ghost']}</h2><p class="q">{T['q_ghost']}</p>
+{sech('g', T['s_ghost'])}<p class="q">{T['q_ghost']}</p>
 {ghost_block}
 
 <h2 id="m">{T['method']}</h2>
@@ -1927,27 +1957,44 @@ const APP_ID={json.dumps(app_name)};
 const INITIAL={json.dumps(initial_deleted)};
 const TITLES={json.dumps(EXPORT_TITLES)};
 const NS='bubble_audit::'+APP_ID;
+const SECTIONS=['p','r','b','o','pl','s','d','w','ap','g'];
+/* When the report is served by the UnBubble console, audit/bubble_cleanup_progress__<app>.json is the source of truth. */
+const SYNC_URL=(location.protocol==='http:'||location.protocol==='https:')?'/api/projects/'+encodeURIComponent(APP_ID)+'/audit-progress':null;
 function _load(){{let s=null;try{{s=JSON.parse(localStorage.getItem(NS));}}catch(e){{}}if(!s){{s={{}};INITIAL.forEach(k=>s[k]=1);_save(s);}}return s;}}
 function _save(s){{try{{localStorage.setItem(NS,JSON.stringify(s));}}catch(e){{}}}}
 let DEL=_load();
-function _count(){{var all=document.querySelectorAll('.delchk'),n=0;all.forEach(c=>{{if(DEL[c.dataset.key])n++;}});var t=all.length;document.getElementById('delcount').textContent=n+' / '+t;document.getElementById('delbar').style.width=(t?100*n/t:0)+'%';}}
-function _apply(){{document.querySelectorAll('.delchk').forEach(function(c){{var on=!!DEL[c.dataset.key];c.checked=on;c.closest('tr').classList.toggle('done',on);}});_count();}}
-document.addEventListener('change',function(e){{if(!e.target.classList||!e.target.classList.contains('delchk'))return;var k=e.target.dataset.key;if(e.target.checked)DEL[k]=1;else delete DEL[k];e.target.closest('tr').classList.toggle('done',e.target.checked);_save(DEL);_count();}});
+function secTitle(k){{var h=document.getElementById(k);return h?h.firstChild.textContent.trim():k;}}
+function secItems(k){{var h=document.getElementById(k),out=[];if(!h)return out;var n=h.nextElementSibling;while(n&&n.tagName!=='H2'){{n.querySelectorAll('.delchk').forEach(c=>out.push(c));n=n.nextElementSibling;}}return out;}}
+function _count(){{var all=document.querySelectorAll('.delchk'),n=0;all.forEach(c=>{{if(DEL[c.dataset.key])n++;}});var t=all.length;document.getElementById('delcount').textContent=n+' / '+t;document.getElementById('delbar').style.width=(t?100*n/t:0)+'%';var sd=SECTIONS.filter(k=>DEL['section:'+k]).length;document.getElementById('seccount').textContent=sd+' / '+SECTIONS.length;}}
+function _applySections(){{SECTIONS.forEach(function(k){{var h=document.getElementById(k);if(!h)return;var on=!!DEL['section:'+k];h.classList.toggle('secok',on);var cb=h.querySelector('.secchk');if(cb)cb.checked=on;secItems(k).forEach(function(c){{var tr=c.closest('tr'),kept=on&&!DEL[c.dataset.key];tr.classList.toggle('kept',kept);var tag=c.parentNode.querySelector('.kepttag');if(kept&&!tag){{tag=document.createElement('span');tag.className='kepttag';tag.textContent={json.dumps(T['kept_tag'])};c.parentNode.appendChild(tag);}}else if(!kept&&tag)tag.remove();}});}});}}
+function _apply(){{document.querySelectorAll('.delchk').forEach(function(c){{var on=!!DEL[c.dataset.key];c.checked=on;c.closest('tr').classList.toggle('done',on);}});_applySections();_count();}}
+document.addEventListener('change',function(e){{var el=e.target;if(!el.classList)return;
+ if(el.classList.contains('delchk')){{var k=el.dataset.key;if(el.checked)DEL[k]=1;else delete DEL[k];el.closest('tr').classList.toggle('done',el.checked);_save(DEL);_applySections();_count();_sync();return;}}
+ if(el.classList.contains('secchk')){{var sk='section:'+el.dataset.sec;if(el.checked)DEL[sk]=1;else delete DEL[sk];_save(DEL);_applySections();_count();_sync();}}
+}});
+/* payload v2: deleted keys + section sign-offs + the items kept on purpose (unchecked inside a signed-off section) */
+function _payload(){{var deleted=Object.keys(DEL).filter(k=>DEL[k]&&k.indexOf('section:')!==0),done=SECTIONS.filter(k=>DEL['section:'+k]),sections={{}},kept=[];
+ SECTIONS.forEach(function(k){{var items=secItems(k),d=items.filter(c=>DEL[c.dataset.key]).length,on=!!DEL['section:'+k];sections[k]={{title:secTitle(k),done:on,items:items.length,deleted:d,kept:on?items.length-d:0}};if(on)items.forEach(function(c){{if(!DEL[c.dataset.key])kept.push({{key:c.dataset.key,label:c.dataset.label||'',section:k}});}});}});
+ return {{app:APP_ID,version:2,updated:new Date().toISOString().slice(0,10),deleted:deleted,sections_done:done,sections:sections,kept:kept}};}}
 function _dl(text,name,type){{var b=new Blob([text],{{type:type}});var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}}
 function exportProgress(fmt){{
- var groups={{}},order=['page','reusable','workflow','customevent','pagewf','hiddenwf','apicall','ghostref','optionset','plugin','style','colorvar','fontvar','datatype','field'];
- document.querySelectorAll('.delchk').forEach(function(c){{var cat=c.dataset.key.split(':')[0];(groups[cat]=groups[cat]||[]).push(c);}});
- if(fmt==='json'){{var out={{app:APP_ID,updated:new Date().toISOString().slice(0,10),deleted:Object.keys(DEL).filter(k=>DEL[k])}};_dl(JSON.stringify(out,null,1),'bubble_cleanup_progress__'+APP_ID+'.json','application/json');return;}}
- var md='# Bubble cleanup progress — '+APP_ID+String.fromCharCode(10)+String.fromCharCode(10)+'> '+{json.dumps(T['md_hint'])}+String.fromCharCode(10)+'> Updated: '+new Date().toISOString().slice(0,10)+String.fromCharCode(10);
- order.forEach(function(cat){{if(!groups[cat])return;md+=String.fromCharCode(10)+'## '+(TITLES[cat]||cat)+String.fromCharCode(10);groups[cat].forEach(function(c){{md+='- ['+(DEL[c.dataset.key]?'x':' ')+'] `'+c.dataset.key+'` — '+(c.dataset.label||'')+String.fromCharCode(10);}});}});
+ if(fmt==='json'){{_dl(JSON.stringify(_payload(),null,1),'bubble_cleanup_progress__'+APP_ID+'.json','application/json');return;}}
+ var NL=String.fromCharCode(10),md='# Bubble cleanup progress — '+APP_ID+NL+NL+'> '+{json.dumps(T['md_hint'])}+NL+'> Updated: '+new Date().toISOString().slice(0,10)+NL;
+ SECTIONS.forEach(function(k){{var items=secItems(k),on=!!DEL['section:'+k];if(!items.length&&!on)return;md+=NL+'## '+secTitle(k)+NL+'- ['+(on?'x':' ')+'] `section:'+k+'` — '+{json.dumps(T['sec_done'])}+NL;items.forEach(function(c){{var d=!!DEL[c.dataset.key];md+='- ['+(d?'x':' ')+'] `'+c.dataset.key+'` — '+(c.dataset.label||'')+((on&&!d)?' · '+{json.dumps(T['md_kept'])}:'')+NL;}});}});
  _dl(md,'bubble_cleanup_progress__'+APP_ID+'.md','text/markdown');
 }}
+function _fromJson(j){{var s={{}};var arr=Array.isArray(j)?j:(j.deleted||[]);arr.forEach(k=>s[k]=1);(Array.isArray(j)?[]:(j.sections_done||[])).forEach(k=>s['section:'+k]=1);return s;}}
 function importProgress(file){{if(!file)return;var r=new FileReader();r.onload=function(){{var t=r.result;
- if(/\\.json$/i.test(file.name)){{try{{var j=JSON.parse(t);var arr=Array.isArray(j)?j:(j.deleted||[]);DEL={{}};arr.forEach(k=>DEL[k]=1);}}catch(e){{alert('Invalid JSON');return;}}}}
+ if(/\\.json$/i.test(file.name)){{try{{DEL=_fromJson(JSON.parse(t));}}catch(e){{alert('Invalid JSON');return;}}}}
  else{{var on=/- \\[[xX]\\]\\s*`([^`]+)`/g,off=/- \\[ \\]\\s*`([^`]+)`/g,m;while(m=on.exec(t))DEL[m[1]]=1;while(m=off.exec(t))delete DEL[m[1]];}}
- _save(DEL);_apply();}};r.readAsText(file);}}
-function clearProgress(){{if(!confirm({json.dumps(T['clear_confirm'])}))return;DEL={{}};_save(DEL);_apply();}}
+ _save(DEL);_apply();_sync();}};r.readAsText(file);}}
+function clearProgress(){{if(!confirm({json.dumps(T['clear_confirm'])}))return;DEL={{}};_save(DEL);_apply();_sync();}}
+/* console sync (optional): PUT the payload to the UnBubble console, which writes audit/bubble_cleanup_progress__<app>.json */
+var _syncT=null,_syncEl=document.getElementById('syncstate');
+function _syncState(cls,txt){{if(!_syncEl)return;_syncEl.className=cls;_syncEl.textContent=txt;}}
+function _sync(){{if(!SYNC_URL||!_syncEl.dataset.on)return;clearTimeout(_syncT);_syncState('',{json.dumps(T['sync_saving'])});_syncT=setTimeout(function(){{fetch(SYNC_URL,{{method:'PUT',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(_payload())}}).then(function(r){{_syncState(r.ok?'ok':'err',r.ok?{json.dumps(T['sync_saved'])}:{json.dumps(T['sync_err'])});}}).catch(function(){{_syncState('err',{json.dumps(T['sync_err'])});}});}},400);}}
 _apply();
+if(SYNC_URL){{fetch(SYNC_URL).then(function(r){{return r.ok?r.json():null;}}).then(function(j){{if(!j||typeof j!=='object'||!('exists' in j))return;_syncEl.dataset.on='1';if(j.exists){{DEL=_fromJson(j);_save(DEL);_apply();_syncState('ok',{json.dumps(T['sync_saved'])});}}else{{_syncState('ok',{json.dumps(T['sync_ready'])});}}}}).catch(function(){{}});}}
 </script></body></html>"""
 
 # ------------------------------------------------------------------ main

@@ -87,7 +87,10 @@ export function getProject(id: string): ProjectDetail | null {
       detail: audit.latest
         ? audit.latest.totalFindings === null
           ? `${audit.rounds.length} round(s)`
-          : `${audit.latest.label} · ${audit.latest.totalFindings} finding(s)`
+          : `${audit.latest.label} · ${audit.latest.totalFindings} finding(s)` +
+            (audit.progressFile && audit.sectionsWithFindings > 0
+              ? ` · ${audit.sectionsResolved}/${audit.sectionsWithFindings} ✓${audit.progressFile.kept.length ? ` · ${audit.progressFile.kept.length} kept` : ''}`
+              : '')
         : '',
     },
     clone: {

@@ -39,7 +39,8 @@ artifacts there — never scatter outputs in Downloads or the skill repo:
 
 ```
 ~/UnBubble-Projects/<app>/
-  audit/       one report per round: <app>-vN_unused_report.html (+ _audit.json, progress .md)
+  audit/       one report per round: <app>-vN_unused_report.html (+ _audit.json,
+               bubble_cleanup_progress__<app>.json|md = deletions + section sign-offs + kept items)
   inventory/   bubble_inventory.py output            (step 2 · clone)
   docs/        as-is docs + PRD-clone.md             (step 2 · clone)
   levelup/     rebuild pack                          (step 3 · level-up)
@@ -225,6 +226,35 @@ file (browsers sandbox that):
 
 Recommend this flow to the user: work in the browser (autosaved), and Export the `.md` when they
 want a durable/committable record. When regenerating the report later, pass that file to `--state`.
+
+### Section sign-off — "audit of this section complete" (kept items)
+
+Every section header (1 · Pages … 10 · Removed-plugin refs) has its own checkbox: **"Auditoria
+desta seção concluída"**. It means *the owner reviewed this whole section*, even if some rows were
+NOT ticked as deleted — some unused entities are kept on purpose (a bulk backend workflow used to
+fix data by hand, a page kept as a manual tool, a plugin kept for a planned feature). Ticking a
+section:
+
+- marks the section ✓ in the report and tags its unchecked rows as **"mantido"** (kept on purpose);
+- makes the console count the section as resolved, so the audit stage reaches **Concluído** when
+  every section with findings is either empty or signed off — no need to delete everything;
+- records the kept rows explicitly. The JSON export (v2) carries `sections_done` and
+  `kept: [{key, label, section}]`; the `.md` export lists a `section:<id>` line per section and
+  suffixes kept rows with "mantido de propósito". `--state` restores both the deletions and the
+  sign-offs (`section:` keys) when the report is regenerated.
+
+Kept items are **not** deleted from the app, so the lean re-export still contains them. That is
+intended: the list travels to step 2, where `unbubble:clone` reads
+`audit/bubble_cleanup_progress__<app>.json` and asks the owner, item by item, whether each kept
+entity enters the clone/level-up as parity, becomes an operational task, or is descoped with a
+dated decision. When you deliver the audit, tell the owner this is how the kept items are handled
+downstream, and mention any section signed off with kept items in your summary.
+
+**Console sync.** When the report is opened inside the UnBubble console (`ui/`, served from
+`/api/projects/<app>/file`), the tracker auto-saves every change to
+`audit/bubble_cleanup_progress__<app>.json` through `PUT /api/projects/<app>/audit-progress` and
+shows "● salvo no console"; that file is then the source of truth (it wins over localStorage on
+load). Opened as a plain file, the report behaves as before (localStorage + manual Export).
 
 ## Output structure (don't reinvent it)
 

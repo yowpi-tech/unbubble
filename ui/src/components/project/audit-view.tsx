@@ -114,12 +114,29 @@ export function AuditView({ project }: { project: ProjectDetail }) {
                     <span className="font-semibold tabular-nums">{a.latest.totalFindings}</span> {t('audit.remaining')}
                   </p>
                 )}
-                {a.progressFile && (
-                  <p className="mt-2 text-xs text-zinc-500">
-                    {t('audit.tracker')}: <span className="font-mono">{a.progressFile.path.replace('audit/', '')}</span> · {a.progressFile.deleted} ✓
-                  </p>
+                {a.latest && a.latest.totalFindings !== null && a.latest.totalFindings > 0 && a.derivedStatus === 'done' && (
+                  <p className="mt-2 text-sm text-green-700 dark:text-green-400">{t('audit.signedOff')}</p>
                 )}
-                {!a.progressFile && <p className="mt-2 text-xs text-zinc-400">{t('audit.trackerHint')}</p>}
+                {a.progressFile && (
+                  <div className="mt-2 text-xs text-zinc-500 space-y-0.5">
+                    <p>
+                      {t('audit.tracker')}: <span className="font-mono">{a.progressFile.path.replace('audit/', '')}</span>
+                      {a.progressFile.updated ? ` · ${a.progressFile.updated}` : ''} · {a.progressFile.deleted} {t('audit.deletedCount')}
+                    </p>
+                    {a.sectionsWithFindings > 0 && (
+                      <p>
+                        {t('audit.sections')}: <span className="font-semibold tabular-nums">{a.sectionsResolved}/{a.sectionsWithFindings}</span>
+                        {a.progressFile.kept.length > 0 && (
+                          <>
+                            {' · '}
+                            <span className="font-semibold tabular-nums">{a.progressFile.kept.length}</span> {t('audit.keptShort')}
+                          </>
+                        )}
+                      </p>
+                    )}
+                  </div>
+                )}
+                <p className="mt-2 text-xs text-zinc-400">{t('audit.trackerHint')}</p>
               </CardContent>
             </Card>
 
@@ -132,15 +149,26 @@ export function AuditView({ project }: { project: ProjectDetail }) {
               <CardContent>
                 {selected && selected.categories.length > 0 ? (
                   <ul className="space-y-1.5">
-                    {selected.categories.map((c) => (
-                      <li key={c.key} className="flex items-center justify-between gap-2 text-sm">
-                        <span className={cn(c.count === 0 && 'text-zinc-400')}>{t(`audit.cat.${c.key}` as TKey)}</span>
-                        <span className="flex items-center gap-2">
-                          <span className={cn('rounded-full px-1.5 py-0.5 text-[10px] font-medium', CONF_CLS[c.confidence])}>{t(`audit.confidence.${c.confidence}` as TKey)}</span>
-                          <span className={cn('tabular-nums w-8 text-right font-medium', c.count === 0 ? 'text-zinc-400' : 'text-zinc-900 dark:text-zinc-100')}>{c.count}</span>
-                        </span>
-                      </li>
-                    ))}
+                    {selected.categories.map((c) => {
+                      const signedOff = c.count > 0 && c.resolved;
+                      return (
+                        <li key={c.key} className="flex items-center justify-between gap-2 text-sm">
+                          <span className={cn('flex items-center gap-1.5 min-w-0', c.count === 0 && 'text-zinc-400')}>
+                            <span className="truncate">{t(`audit.cat.${c.key}` as TKey)}</span>
+                            {signedOff && (
+                              <span className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300">
+                                ✓ {t('audit.sectionDone')}
+                                {c.kept.length > 0 ? ` · ${c.kept.length} ${t('audit.keptShort')}` : ''}
+                              </span>
+                            )}
+                          </span>
+                          <span className="flex items-center gap-2 shrink-0">
+                            <span className={cn('rounded-full px-1.5 py-0.5 text-[10px] font-medium', CONF_CLS[c.confidence])}>{t(`audit.confidence.${c.confidence}` as TKey)}</span>
+                            <span className={cn('tabular-nums w-8 text-right font-medium', c.count === 0 ? 'text-zinc-400' : 'text-zinc-900 dark:text-zinc-100')}>{c.count}</span>
+                          </span>
+                        </li>
+                      );
+                    })}
                   </ul>
                 ) : (
                   <p className="text-sm text-zinc-400">JSON {t('common.missing')}</p>
@@ -163,6 +191,38 @@ export function AuditView({ project }: { project: ProjectDetail }) {
               </CardContent>
             </Card>
           </div>
+
+          {a.progressFile && a.progressFile.kept.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">
+                  {t('audit.kept')} <span className="text-zinc-400 font-normal tabular-nums">· {a.progressFile.kept.length}</span>
+                </CardTitle>
+                <p className="text-xs text-zinc-500">{t('audit.keptHint')}</p>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {(a.latest?.categories ?? [])
+                    .filter((c) => c.kept.length > 0)
+                    .map((c) => (
+                      <div key={c.key}>
+                        <p className="text-xs font-semibold text-zinc-600 dark:text-zinc-300 mb-1">
+                          {t(`audit.cat.${c.key}` as TKey)} <span className="text-zinc-400 font-normal tabular-nums">({c.kept.length})</span>
+                        </p>
+                        <ul className="space-y-0.5">
+                          {c.kept.map((k) => (
+                            <li key={k.key} className="text-sm flex items-baseline gap-2 min-w-0">
+                              <span className="truncate">{k.label || k.key}</span>
+                              <span className="font-mono text-[11px] text-zinc-400 shrink-0">{k.key}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           <StageControl projectId={project.id} stage="audit" derived={a.derivedStatus} override={a.override} />
 

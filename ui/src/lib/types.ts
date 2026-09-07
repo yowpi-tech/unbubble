@@ -46,6 +46,27 @@ export interface AuditCategory {
   key: string;
   count: number;
   confidence: Confidence;
+  /** Report section id (h2 anchor: p, r, b, o, pl, s, d, w, ap, g) this category is signed off with. */
+  section: string;
+  /** No findings, or the owner signed the section off in the report (kept items recorded). */
+  resolved: boolean;
+  /** Items the owner kept on purpose in a signed-off section (from the progress file). */
+  kept: KeptItem[];
+}
+
+/** An unused entity the owner decided to keep — the clone step asks whether it enters parity. */
+export interface KeptItem {
+  key: string; // "<category>:<id>" as in the report
+  label: string;
+  section: string;
+}
+
+export interface AuditProgress {
+  path: string;
+  updated?: string;
+  deleted: number;
+  sectionsDone: string[];
+  kept: KeptItem[];
 }
 
 export interface AuditRound {
@@ -77,8 +98,12 @@ export interface AuditStage {
   override?: StageOverride;
   rounds: AuditRound[];
   latest?: AuditRound;
-  progressFile?: { path: string; deleted: number };
-  progress: number; // 0..1 — 1 when the latest round has zero findings
+  progressFile?: AuditProgress;
+  sectionsTotal: number;
+  /** Sections signed off / sections that still have findings. */
+  sectionsResolved: number;
+  sectionsWithFindings: number;
+  progress: number; // 0..1 — 1 when the latest round has zero findings or every section is signed off
 }
 
 // ---------------------------------------------------------------- clone

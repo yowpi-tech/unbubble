@@ -79,6 +79,30 @@ extraction — if it fails, stop and investigate before proceeding.
 For export semantics (what ids mean, how references work, editor names), read
 `../audit/references/reference-model.md` — do not re-derive it.
 
+### 1b · Entities the owner KEPT on purpose in the audit (ask before documenting)
+
+The audit report lets the owner sign a section off as *reviewed* without deleting every row.
+Those unused-but-kept entities survive in the lean export, so the inventory will list them as if
+they were live product features. BEFORE step 2, read
+`<workdir>/audit/bubble_cleanup_progress__<app>.json` (or the `.md` export): the `kept` array
+(`[{key, label, section}]`, keys like `workflow:<inner_id>`, `page:<id>`, `plugin:<id>`) is the
+list of unused entities the owner chose to keep. If it is non-empty, ASK the owner (AskUserQuestion,
+batches of up to 4, one question per item or per homogeneous group) what each one becomes in the
+new system:
+
+- **Parity** — it is a real feature: document it like any other entity (BR-xxx / PRD requirement,
+  PARITY-MATRIX `REQ`/`BR-xxx`).
+- **Operational tooling** — e.g. a bulk backend workflow used to fix data by hand: keep it OUT of
+  the product docs and PRD, and record it in `08-open-questions.md` under "Ferramentas
+  operacionais a recriar" so level-up turns it into an ops/maintenance task (PARITY-MATRIX
+  `INFRA (ops task, decisão N)`).
+- **Descoped** — it dies with Bubble: dated owner decision in `08-open-questions.md`, PARITY-MATRIX
+  `DESCOPED (decisão N, YYYY-MM-DD)`, and it must not appear in PRD-clone as a requirement.
+
+Record every answer as a dated decision (same "Decisões do dono (YYYY-MM-DD)" section as 3b). A
+kept item without a disposition is a silent gap — the level-up gate (step 0) checks for them. If
+there is no progress file, or its `kept` list is empty, skip this step and say so.
+
 ### 2 · Interpret business logic (model work — the part that matters)
 
 The inventory gives structure; **you** extract meaning. The JSONs deliberately contain only

@@ -46,6 +46,15 @@ record the answers in 08 as dated owner decisions ("Decisões do dono (YYYY-MM-D
 around an unanswered blocking question — an assessment built on guesses produces a rebuild pack
 the owner has to redo.
 
+Also check the audit's kept items: `<workdir>/audit/bubble_cleanup_progress__<app>.json` (`kept`
+array) lists unused entities the owner deliberately kept when signing sections off. Every one of
+them must already carry a disposition from the clone step (PARITY-MATRIX `REQ`/`BR-xxx`, `INFRA
+(ops task, …)` or `DESCOPED (decisão N, data)`; decisions in `08-open-questions.md`). If the clone
+ran before the sign-off existed, or a kept item has no disposition, ask the owner NOW — parity,
+operational tooling (becomes an `[infra]` maintenance story in BACKLOG.md), or descoped — and record
+the dated decision before designing. Descoped items never resurface in PRD-v2 or BACKLOG.md;
+operational ones become stories in the migration/cutover epic, not product features.
+
 ### 0b · Load the production-gate lens (`enterprise-best-practices` skill)
 
 The level-up is exactly a "day-0 architecture + production-readiness" moment, which is what the
