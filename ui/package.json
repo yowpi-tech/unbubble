@@ -3,6 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "description": "Local console for the UnBubble pipeline — tracks audit, clone docs and level-up progress of every project in ~/UnBubble-Projects.",
+  "license": "Apache-2.0",
+  "author": "Marlon Trettin <marlon@yowpi.com> (Yowpi Tech)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yowpi-tech/unbubble.git",
+    "directory": "ui"
+  },
   "scripts": {
     "dev": "next dev -p 3333",
     "build": "next build",

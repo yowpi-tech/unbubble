@@ -7,5 +7,8 @@
     "name": "Marlon Trettin",
     "email": "marlon@yowpi.com"
   },
+  "homepage": "https://github.com/yowpi-tech/unbubble",
+  "repository": "https://github.com/yowpi-tech/unbubble",
+  "license": "Apache-2.0",
   "skills": "./skills/"
 }
