@@ -26,31 +26,17 @@ const STAGE_ICON: Record<StageKey, React.ComponentType<{ className?: string }>> 
   levelup_docs: Rocket,
   levelup_impl: Wrench,
 };
-function promptFor(step: ProjectDetail['nextStep'], p: ProjectDetail, locale: 'pt' | 'en'): string {
-  const exp = p.state.links?.bubble_export ?? (locale === 'pt' ? '~/Downloads/<app>.bubble' : '~/Downloads/<app>.bubble');
-  if (step === 'audit')
-    return locale === 'pt'
-      ? `Rode o unbubble:audit no export ${exp} (projeto ${p.id}, rodada v${(p.audit.latest?.version ?? 0) + 1}) e me diga o que posso excluir.`
-      : `Run unbubble:audit on ${exp} (project ${p.id}, round v${(p.audit.latest?.version ?? 0) + 1}) and tell me what I can delete.`;
-  if (step === 'clone')
-    return locale === 'pt'
-      ? `Rode o unbubble:clone no export enxuto ${exp} (projeto ${p.id}): documentação as-is, PRD-clone e PARITY-MATRIX.`
-      : `Run unbubble:clone on the lean export ${exp} (project ${p.id}): as-is docs, PRD-clone and PARITY-MATRIX.`;
-  if (step === 'levelup_docs')
-    return locale === 'pt'
-      ? `Rode o unbubble:level-up no projeto ${p.id} (~/UnBubble-Projects/${p.id}): assessment, arquitetura alvo, data model, plano de migração, PRD-v2, backlog e execution contract; rode o spec_coverage.py com --strict-acceptance antes de entregar.`
-      : `Run unbubble:level-up on project ${p.id} (~/UnBubble-Projects/${p.id}): assessment, target architecture, data model, migration plan, PRD-v2, backlog and execution contract; run spec_coverage.py --strict-acceptance before delivering.`;
-  if (step === 'levelup_impl')
-    return locale === 'pt'
-      ? `Leia ~/UnBubble-Projects/${p.id}/levelup/EXECUTION-CONTRACT.md e implemente a próxima história aberta do BACKLOG.md; rode parity_check.py ao concluir o módulo.`
-      : `Read ~/UnBubble-Projects/${p.id}/levelup/EXECUTION-CONTRACT.md and implement the next open story in BACKLOG.md; run parity_check.py when the module is done.`;
-  return '';
-}
-
 export function ProjectOverview({ project }: { project: ProjectDetail }) {
   const { t, locale } = useLocale();
   const p = project;
   const [openControl, setOpenControl] = useState<StageKey | null>(null);
+
+  // The suggested prompt comes from the dictionary, so every locale can word it its own way.
+  const prompt = t(`project.prompt.${p.nextStep}` as TKey, {
+    export: p.state.links?.bubble_export ?? '~/Downloads/<app>.bubble',
+    id: p.id,
+    round: (p.audit.latest?.version ?? 0) + 1,
+  });
 
   const overrideFor = (k: StageKey) =>
     k === 'audit' ? p.audit.override : k === 'clone' ? p.clone.override : k === 'levelup_docs' ? p.levelup.docsOverride : p.levelup.implOverride;
@@ -62,8 +48,6 @@ export function ProjectOverview({ project }: { project: ProjectDetail }) {
         : k === 'levelup_docs'
           ? p.levelup.docsDerivedStatus
           : p.levelup.implDerivedStatus;
-
-  const prompt = promptFor(p.nextStep, p, locale);
 
   return (
     <div className="space-y-6">

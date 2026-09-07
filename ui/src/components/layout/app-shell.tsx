@@ -2,7 +2,9 @@
 
 import { useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
-import { Languages, MoonIcon, RefreshCw, SunIcon } from 'lucide-react';
+import { ChevronDown, Languages, MoonIcon, RefreshCw, SunIcon } from 'lucide-react';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { LOCALES } from '@/lib/i18n';
 import { AppSidebar, type SidebarProject } from '@/components/layout/app-sidebar';
 import { HeaderBreadcrumb, HeaderBreadcrumbProvider } from '@/components/layout/header-breadcrumb';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
@@ -43,13 +45,28 @@ export function AppShell({
                   </TooltipTrigger>
                   <TooltipContent>{t('nav.rescan')}</TooltipContent>
                 </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger render={<Button variant="ghost" size="sm" aria-label={t('nav.language')} />} onClick={() => setLocale(locale === 'pt' ? 'en' : 'pt')}>
+                {/* Language menu — lists every locale registered in lib/i18n (add a file there to add a language). */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger render={<Button variant="ghost" size="sm" aria-label={t('nav.language')} title={t('nav.language')} />}>
                     <Languages className="size-4" />
                     <span className="text-xs font-medium uppercase">{locale}</span>
-                  </TooltipTrigger>
-                  <TooltipContent>{t('nav.language')}</TooltipContent>
-                </Tooltip>
+                    <ChevronDown className="size-3 opacity-60" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="min-w-48">
+                    {/* Base UI requires group labels inside a Group */}
+                    <DropdownMenuGroup>
+                      <DropdownMenuLabel>{t('nav.language')}</DropdownMenuLabel>
+                      <DropdownMenuRadioGroup value={locale} onValueChange={(v) => setLocale(String(v))}>
+                        {LOCALES.map((l) => (
+                          <DropdownMenuRadioItem key={l.code} value={l.code} lang={l.tag}>
+                            <span className="flex-1">{l.label}</span>
+                            <span className="text-[10px] font-mono uppercase text-muted-foreground">{l.code}</span>
+                          </DropdownMenuRadioItem>
+                        ))}
+                      </DropdownMenuRadioGroup>
+                    </DropdownMenuGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
                 <Tooltip>
                   <TooltipTrigger
                     render={<Button variant="ghost" size="icon-sm" aria-label={t('nav.theme')} />}

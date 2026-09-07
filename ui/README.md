@@ -5,7 +5,7 @@ shows, per project, how far the three stages are:
 
 | Stage | Derived from |
 |---|---|
-| **Audit** | `audit/<app>-vN_audit.json` (findings per category per round) + the HTML reports (embedded) |
+| **Audit** | `audit/<app>-vN_audit.json` (findings per category per round) + the HTML reports (embedded) + `audit/bubble_cleanup_progress__<app>.json` (deletions, per-section sign-offs and items kept on purpose — auto-saved by the embedded report through `PUT /api/projects/<app>/audit-progress`) |
 | **Clone · docs** | `inventory/summary.json`, `secrets/ENV-KEYS.md` (+ `.env` existence only), `docs/00…08-*.md`, `PRD-clone.md`, `PARITY-MATRIX.md` (rows with/without disposition), `08-open-questions.md` (blocking / decisions) |
 | **Level-up · docs** | the nine files of `levelup/` + `spec-coverage.json` (gate) + `parity-report.json` |
 | **Level-up · implementation** | stories parsed from `levelup/BACKLOG.md` (same rules as `spec_coverage.py`) ticked off in the UI |
@@ -61,6 +61,22 @@ src/components/    ui/ (shadcn base-nova, same kit as BubbleDocs), layout/, proj
 UI kit, sidebar, breadcrumb, doc viewer with table of contents and the Mermaid renderer were
 reused from BubbleDocs; Markdown is rendered with `react-markdown` (the skills emit plain
 Markdown, not MDX).
+
+## Adding a language
+
+Translations live in `src/lib/i18n/locales/`, one file per language, and are listed in
+`src/lib/i18n/index.ts`. English is the reference dictionary; anything a locale leaves out falls
+back to it.
+
+1. Copy `src/lib/i18n/locales/en.ts` to, for example, `es.ts` and translate the values (keep the
+   keys and the `{placeholders}`). Declare it as `Dictionary` for a complete translation or
+   `Partial<Dictionary>` while you are still translating.
+2. In `src/lib/i18n/index.ts`, import it and append an entry to `LOCALES`:
+   ```ts
+   { code: 'es', label: 'Español', tag: 'es', matches: ['es'], dictionary: es },
+   ```
+3. Done. The language menu in the header, the cookie, `<html lang>`, date formatting and the
+   Accept-Language detection all read that list.
 
 ## Logo animation
 
