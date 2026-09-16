@@ -62,6 +62,15 @@ UI kit, sidebar, breadcrumb, doc viewer with table of contents and the Mermaid r
 reused from BubbleDocs; Markdown is rendered with `react-markdown` (the skills emit plain
 Markdown, not MDX).
 
+## Preferences
+
+Theme and language are per-viewer preferences stored in the browser's localStorage and restored
+when the console is reopened: `unbubble.theme` (`light` / `dark`, managed by next-themes, applied
+before the first paint) and `unbubble.locale` (a registered locale code). The locale is also
+mirrored in the `unbubble_locale` cookie so the server renders the right language on the first
+paint; when the two disagree (for example after clearing cookies), localStorage wins and the
+cookie is rewritten.
+
 ## Adding a language
 
 The console ships in English, Português (Brasil) and Español. Translations live in

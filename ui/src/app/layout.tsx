@@ -24,7 +24,8 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   return (
     <html lang={getLocale(locale).tag} className="h-full antialiased" suppressHydrationWarning>
       <body className="min-h-full flex flex-col">
-        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+        {/* next-themes persists the choice in localStorage under storageKey and restores it before paint */}
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange storageKey="unbubble.theme">
           <LocaleProvider initialLocale={locale}>
             <AppShell projects={projects} version={version} projectsRoot={prettyPath(projectsDir())}>
               {children}
