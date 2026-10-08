@@ -1,0 +1,309 @@
+"""Read-only readiness status for configured Bubble MCP profiles."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from bubble_mcp.context.detector import default_context_path
+from bubble_mcp.context.freshness import context_freshness, load_context_with_overlay
+from bubble_mcp.core.config import (
+    BubbleProfile,
+    get_settings_path,
+    load_settings,
+    resolve_config_artifact_path,
+    resolve_profile,
+)
+from bubble_mcp.sessions.constants import DEFAULT_LOGIN_WAIT_SECONDS
+from bubble_mcp.sessions.store import editor_write_session_status, load_session, session_path
+
+
+def _path_status(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {"configured": False, "exists": False, "path": None}
+    return {"configured": True, "exists": path.exists(), "path": str(path)}
+
+
+def _safe_context_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    safe_summary = {
+        "app_id": summary.get("app_id"),
+        "source": summary.get("source"),
+        "counts": summary.get("counts", {}),
+        "nodes": summary.get("nodes", 0),
+        "edges": summary.get("edges", 0),
+    }
+    metadata = summary.get("metadata")
+    if not isinstance(metadata, dict):
+        return safe_summary
+
+    safe_metadata: dict[str, Any] = {}
+    for key in ("saved_at", "captured_at", "generated_at", "schema_version", "source"):
+        value = metadata.get(key)
+        if isinstance(value, str | int | float | bool):
+            safe_metadata[key] = value
+
+    mutation_overlay = metadata.get("mutation_overlay")
+    if isinstance(mutation_overlay, dict):
+        safe_metadata["mutation_overlay"] = {
+            key: value
+            for key, value in mutation_overlay.items()
+            if key in {"nodes", "edges", "pages", "elements", "mutations", "updated_at"}
+            and (isinstance(value, str | int | float | bool) or value is None)
+        }
+
+    default_styles = metadata.get("default_styles")
+    if isinstance(default_styles, dict):
+        safe_metadata["default_styles"] = {"count": len(default_styles)}
+
+    provenance = metadata.get("provenance")
+    if isinstance(provenance, dict):
+        safe_sources = provenance.get("sources")
+        safe_metadata["provenance"] = {
+            "primary_source": str(provenance.get("primary_source") or ""),
+            "sources": [str(item) for item in safe_sources] if isinstance(safe_sources, list) else [],
+            "completeness": str(provenance.get("completeness") or "partial"),
+            "bubble_export_available": bool(provenance.get("bubble_export_available")),
+        }
+
+    if safe_metadata:
+        safe_summary["metadata"] = safe_metadata
+    return safe_summary
+
+
+def _context_path_for_profile(profile: BubbleProfile, settings_dir: Path) -> tuple[Path | None, Path | None]:
+    source_artifact = resolve_config_artifact_path(settings_dir, profile.app_json_path)
+    if source_artifact is None:
+        return None, default_context_path(profile.name, profile.app_id)
+    if source_artifact.suffix.lower() == ".bubble":
+        return source_artifact, default_context_path(profile.name, profile.app_id)
+    return source_artifact, source_artifact
+
+
+def _context_status(profile: BubbleProfile, *, settings_dir: Path, max_age_hours: int) -> dict[str, Any]:
+    source_artifact, context_path = _context_path_for_profile(profile, settings_dir)
+    status = _path_status(context_path)
+    if context_path is None or not context_path.exists():
+        return {
+            **status,
+            "source_artifact": _path_status(source_artifact),
+            "loadable": False,
+            "app_id_matches_profile": False,
+            "completeness": "missing",
+            "summary": None,
+            "freshness": {
+                "status": "missing",
+                "stale": True,
+                "max_age_hours": max_age_hours,
+            },
+        }
+    try:
+        context = load_context_with_overlay(context_path, profile=profile.name, app_id=profile.app_id)
+    except Exception as exc:
+        return {
+            **status,
+            "source_artifact": _path_status(source_artifact),
+            "loadable": False,
+            "app_id_matches_profile": False,
+            "completeness": "invalid",
+            "summary": None,
+            "freshness": {
+                "status": "invalid",
+                "stale": True,
+                "max_age_hours": max_age_hours,
+            },
+            "error": str(exc),
+        }
+    provenance = context.metadata.get("provenance")
+    explicit_completeness = (
+        str(provenance.get("completeness") or "") if isinstance(provenance, dict) else ""
+    )
+    completeness = explicit_completeness if explicit_completeness in {"complete", "partial"} else (
+        "complete" if source_artifact is not None else "partial"
+    )
+    return {
+        **status,
+        "source_artifact": _path_status(source_artifact),
+        "loadable": True,
+        "app_id_matches_profile": context.app_id == profile.app_id,
+        "completeness": completeness,
+        "summary": _safe_context_summary(context.summary()),
+        "freshness": context_freshness(context, path=context_path, max_age_hours=max_age_hours),
+    }
+
+
+def _session_status(profile: BubbleProfile, *, settings_dir: Path) -> dict[str, Any]:
+    path = session_path(profile.name, settings_dir)
+    try:
+        session = load_session(profile.name, settings_dir)
+    except Exception as exc:
+        return {
+            "exists": path.exists(),
+            "path": str(path),
+            "metadata": None,
+            "app_id_matches_profile": False,
+            "write_ready": False,
+            "write_diagnostics": editor_write_session_status(None),
+            "error": str(exc),
+        }
+    if not session:
+        return {
+            "exists": False,
+            "path": str(path),
+            "metadata": None,
+            "app_id_matches_profile": False,
+            "write_ready": False,
+            "write_diagnostics": editor_write_session_status(None),
+        }
+    metadata = session.metadata()
+    write_status = editor_write_session_status(session)
+    return {
+        "exists": True,
+        "path": str(path),
+        "metadata": metadata,
+        "app_id_matches_profile": session.app_id == profile.app_id,
+        "app_version_matches_profile": bool(
+            not profile.app_version or not session.app_version or session.app_version == profile.app_version
+        ),
+        "write_ready": write_status["write_ready"],
+        "write_diagnostics": write_status,
+    }
+
+
+def _next_actions(*, profile: BubbleProfile | None, session: dict[str, Any] | None, context: dict[str, Any] | None) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    if profile is None:
+        actions.append(
+            {
+                "tool": "bubble_profile_list",
+                "reason": "Profile was not found. List profiles or create one with `bubble-mcp profile add`.",
+            }
+        )
+        return actions
+    if not session or not session.get("exists"):
+        actions.append(
+            {
+                "tool": "bubble_session_login",
+                "args": {
+                    "profile": profile.name,
+                    "app_id": profile.app_id,
+                    "wait_seconds": DEFAULT_LOGIN_WAIT_SECONDS,
+                },
+                "command": f"bubble-mcp session login --profile {profile.name} --app-id {profile.app_id}",
+                "reason": "No captured Bubble editor session exists for this profile. Run interactive session login or import a captured session before real writes.",
+            }
+        )
+    elif not session.get("app_id_matches_profile"):
+        actions.append(
+            {
+                "tool": "bubble_session_login",
+                "args": {
+                    "profile": profile.name,
+                    "app_id": profile.app_id,
+                    "wait_seconds": DEFAULT_LOGIN_WAIT_SECONDS,
+                },
+                "command": f"bubble-mcp session login --profile {profile.name} --app-id {profile.app_id}",
+                "reason": "Stored session app_id does not match the configured profile app_id. Capture a new session for this profile.",
+            }
+        )
+    elif not session.get("write_ready"):
+        actions.append(
+            {
+                "tool": "bubble_session_login",
+                "args": {
+                    "profile": profile.name,
+                    "app_id": profile.app_id,
+                    "wait_seconds": DEFAULT_LOGIN_WAIT_SECONDS,
+                },
+                "command": f"bubble-mcp session login --profile {profile.name} --app-id {profile.app_id}",
+                "reason": (
+                    "Stored session can exist and still be insufficient for editor writes. Recapture it and "
+                    "keep the Bubble editor open until editor request headers are detected."
+                ),
+            }
+        )
+    if not context or not context.get("loadable"):
+        actions.append(
+            {
+                "tool": "bubble_context_detect",
+                "args": {"profile": profile.name, "app_id": profile.app_id, "force": True},
+                "reason": "No loadable compact context is configured. Detect context before resolving pages/elements.",
+            }
+        )
+    elif not context.get("app_id_matches_profile"):
+        actions.append(
+            {
+                "tool": "bubble_context_detect",
+                "args": {"profile": profile.name, "app_id": profile.app_id, "force": True},
+                "reason": "Loaded context app_id does not match the configured profile app_id. Refresh context for this profile.",
+            }
+        )
+    elif context.get("completeness") != "complete":
+        actions.append(
+            {
+                "tool": "bubble_context_detect",
+                "args": {"profile": profile.name, "app_id": profile.app_id, "force": True},
+                "reason": (
+                    "Compact context is partial. A no-export app requires both console.log(app) "
+                    "and editor crawler data before it is ready."
+                ),
+            }
+        )
+    elif context.get("freshness", {}).get("stale"):
+        actions.append(
+            {
+                "tool": "bubble_context_detect",
+                "args": {"profile": profile.name, "app_id": profile.app_id, "force": True},
+                "reason": "Context is stale. Refresh before mutations that depend on current pages/elements.",
+            }
+        )
+    return actions
+
+
+def profile_status(profile_name: str = "", *, max_age_hours: int = 24) -> dict[str, Any]:
+    """Return read-only setup/readiness status for one local profile."""
+
+    settings = load_settings()
+    profile = resolve_profile(settings, profile_name or None)
+    requested = profile_name or settings.default_profile
+    settings_path = get_settings_path(settings.config_dir)
+    if profile is None:
+        return {
+            "ok": False,
+            "ready": False,
+            "requested_profile": requested,
+            "profile": None,
+            "settings": {"config_dir": str(settings.config_dir), "settings_path": str(settings_path)},
+            "session": None,
+            "context": None,
+            "next_actions": _next_actions(profile=None, session=None, context=None),
+        }
+
+    session = _session_status(profile, settings_dir=settings.config_dir)
+    context = _context_status(profile, settings_dir=settings.config_dir, max_age_hours=max_age_hours)
+    ready = bool(
+        session.get("exists")
+        and session.get("app_id_matches_profile")
+        and session.get("write_ready")
+        and context.get("loadable")
+        and context.get("app_id_matches_profile")
+        and context.get("completeness") == "complete"
+        and not context.get("freshness", {}).get("stale")
+    )
+    return {
+        "ok": True,
+        "ready": ready,
+        "requested_profile": requested,
+        "profile": {
+            "name": profile.name,
+            "app_id": profile.app_id,
+            "appname": profile.appname,
+            "app_version": profile.app_version,
+            "editor_url": profile.editor_url,
+            "app_json_path": profile.app_json_path,
+            "consolelog_json_path": profile.consolelog_json_path,
+        },
+        "settings": {"config_dir": str(settings.config_dir), "settings_path": str(settings_path)},
+        "session": session,
+        "context": context,
+        "next_actions": _next_actions(profile=profile, session=session, context=context),
+    }

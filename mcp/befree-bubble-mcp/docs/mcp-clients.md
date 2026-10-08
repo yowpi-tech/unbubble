@@ -1,0 +1,344 @@
+# MCP Clients
+
+`bubble-mcp-server` is a stdio MCP server. It is meant to be started by an MCP
+client, not kept running as a separate HTTP service.
+
+The `initialize` response includes compact server instructions that tell agents
+to use MCP tools directly, use `bubble_project_bootstrap` for first-time
+profile/app setup, check `bubble_profile_status` for configured profiles, use
+`bubble_task_runbook` for routing and ordered execution guidance, and keep
+`execute=false` unless the user explicitly requested a real write.
+
+## Before connecting
+
+Install the Python package and create at least one local Bubble profile:
+
+macOS / Linux / Git Bash:
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install ".[browser]"
+python -m playwright install chromium
+bubble-mcp init
+bubble-mcp profile add my-app --app-id my-bubble-app
+bubble-mcp profile list
+bubble-mcp profile status --profile my-app
+```
+
+Windows PowerShell:
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install ".[browser]"
+python -m playwright install chromium
+bubble-mcp init
+bubble-mcp profile add my-app --app-id my-bubble-app
+bubble-mcp profile list
+bubble-mcp profile status --profile my-app
+```
+
+## Codex or other stdio MCP clients
+
+Use the virtualenv Python executable as the command and run the MCP server
+module:
+
+```json
+{
+  "mcpServers": {
+    "befree-bubble-mcp": {
+      "command": "/absolute/path/to/befree-bubble-mcp/.venv/bin/python",
+      "args": ["-m", "bubble_mcp.server.stdio"],
+      "env": {
+        "BUBBLE_MCP_CONFIG_DIR": "/Users/me/.config/bubble-mcp"
+      }
+    }
+  }
+}
+```
+
+On Windows:
+
+```json
+{
+  "mcpServers": {
+    "befree-bubble-mcp": {
+      "command": "C:\\path\\to\\befree-bubble-mcp\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "bubble_mcp.server.stdio"],
+      "env": {
+        "BUBBLE_MCP_CONFIG_DIR": "C:\\Users\\me\\.config\\bubble-mcp"
+      }
+    }
+  }
+}
+```
+
+The `bubble-mcp-server` console script is also installed and works in normal
+shell environments:
+
+```json
+{
+  "mcpServers": {
+    "befree-bubble-mcp": {
+      "command": "/absolute/path/to/befree-bubble-mcp/.venv/bin/bubble-mcp-server",
+      "args": [],
+      "env": {
+        "BUBBLE_MCP_CONFIG_DIR": "/Users/me/.config/bubble-mcp"
+      }
+    }
+  }
+}
+```
+
+Prefer the Python module form for desktop clients that do not inherit your
+activated shell or when local macOS execution policy blocks generated console
+scripts.
+
+Keep `BUBBLE_MCP_CONFIG_DIR` consistent with the directory used when you ran
+`bubble-mcp init` and `bubble-mcp profile add`.
+
+### Refreshing client tool catalogs
+
+Some desktop MCP clients cache the discovered tool catalog per configured
+server. After upgrading the Bubble MCP package or adding tool families such as
+extension packs, restart the client and start a fresh chat/thread so it runs a
+new MCP `initialize` and `tools/list` cycle. Existing long-running or compacted
+threads may keep the old callable-tool snapshot even when the local server is
+already exposing the new tools.
+
+If a client still does not show newly added tools, run the manual protocol check
+below with the same command, `cwd`, and environment configured in the client.
+The server response is the source of truth; if `tools/list` includes the tool,
+the remaining issue is the client's cached catalog or stale thread state.
+
+## Quick manual protocol check
+
+You can verify the server responds before adding it to a client:
+
+```bash
+printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}\n' | python -m bubble_mcp.server.stdio
+```
+
+The response should include server info for `befree-bubble-mcp`, tools,
+resources, and prompts.
+
+Tool call responses include both a JSON text fallback and `structuredContent`
+with the same redacted payload for clients that can consume structured MCP
+results directly. Tool execution failures are returned as MCP tool results with
+`isError: true` and `structuredContent.ok: false`; protocol errors are reserved
+for invalid JSON-RPC requests or unsupported MCP methods.
+
+## Resources and Prompts
+
+The server exposes read-only resources for clients that support MCP
+`resources/list`, `resources/templates/list`, and `resources/read`:
+
+- `bubble://docs/agent-quickstart`: shortest operating sequence for agents.
+- `bubble://docs/agent-runtime`: compact operating rules for agents.
+- `bubble://catalog/summary`: JSON summary of catalog size and agent entrypoints.
+- `bubble://recipes/summary`: JSON summary of available task recipes.
+- `bubble://recipes/{recipe_id}`: complete JSON recipe for one task family,
+  such as `bubble://recipes/html_import` or
+  `bubble://recipes/page_or_reusable`.
+- `bubble://tools/{tool_name}`: complete JSON schema for one exposed MCP tool,
+  such as `bubble://tools/create_from_html`, without loading the full
+  `tools/list` payload.
+
+The server also exposes reusable prompts through `prompts/list` and
+`prompts/get`:
+
+- `bubble-task-runbook`: turns a user task/profile/context into a short
+  execution runbook that starts with profile readiness.
+- `bubble-html-import`: guides URL/selector imports through the advanced HTML
+  runtime after profile readiness.
+- `bubble-quality-gate`: lists the smoke and coverage checks to run before
+  claiming MCP work is complete.
+
+Agents should prefer these resources/prompts over inspecting repository docs
+when the client supports them.
+
+Clients that support `completion/complete` can autocomplete recipe resource
+template variables, such as `recipe_id` for `bubble://recipes/{recipe_id}`, and
+common prompt arguments such as `profile`, `context`, `parent`, and boolean
+flags.
+Tool argument completion is also available for common routing values: `profile`,
+`context`, `parent`, boolean flags such as `execute`, `force`,
+`include_metadata`, `include_profile_status`, `rendered_html`, and
+`refresh_context`, plus declared schema enums/examples/defaults such as `kind`,
+`app_version`, `from_app_version`, `bubble_runtime_smoke.suite`, and
+`bubble_task_recipe.recipe`.
+
+## Available tools
+
+The server exposes the Aria-compatible Bubble MCP catalog, plus native
+standalone helper tools and enabled extension-pack tools. Catalog tools accept
+their original arguments. Agents
+should call these tools directly instead of discovering equivalent CLI commands.
+Use `bubble_tool_coverage` to audit how every exposed tool is handled.
+Use `bubble_catalog_quality` to audit whether the catalog is efficient for
+agents: clear descriptions, documented fields, valid annotations, readable
+resources/prompts, and complete runtime coverage.
+Use `bubble_profile_status` when the client needs a compact read-only snapshot
+of one profile's session/context readiness before mutating Bubble.
+Use `bubble_readiness_check` when the client needs the standard readiness
+sequence in one compact call.
+Use `bubble_runtime_smoke` when the user asks whether the MCP is operational
+against a local install or profile.
+
+For profile-based Bubble work, pass `profile` and the tool-specific arguments.
+The server resolves the stored Bubble session and context, then routes catalog
+tools through the packaged Aria-compatible runtime when a matching runtime
+method exists. Without `execute=true`, mutating tools return a compiled preview.
+With `execute=true`, they write using the local captured session.
+
+For lower-level standalone execution, pass `app_id` for compiler-supported
+families or `write_payload` for exact Bubble editor writes.
+
+- `bubble_health_check`: reports local server capabilities.
+- `bubble_project_bootstrap`: creates or updates a local Bubble profile, reports
+  profile readiness, returns next setup actions, and can optionally run context
+  detection. Use this when the user provides a profile name and Bubble app id so
+  the agent does not need to discover the setup sequence.
+- `bubble_profile_add`: adds or updates a local Bubble profile from MCP. It
+  writes only local MCP settings and does not contact Bubble. Use it when the
+  user provided a profile name and Bubble app id, then continue with session
+  login/import and `bubble_context_detect`.
+- `bubble_profile_status`: reports whether a configured profile has matching
+  session metadata and loadable/fresh context, plus next actions when session
+  login or context detection is still needed.
+- `bubble_session_inspect`: inspects one stored profile session with redacted
+  session data, stored header keys, cookie presence, and computed Bubble write
+  headers. Use it to debug auth/session capture without shelling out to
+  `bubble-mcp session inspect`.
+- `bubble_session_login`: opens a local Playwright browser for interactive
+  Bubble login, captures editor cookies/request headers, and saves the redacted
+  session for a profile. Use it from MCP clients when session readiness reports
+  a missing or mismatched session and the user can complete login in the opened
+  browser.
+- `bubble_readiness_check`: runs server health, compact coverage/catalog-quality smoke, agent-routing, profile-status readiness when a profile is provided, and optional profile safe-read or family-preview checks in one call. Use this before broad Bubble work or after installation; pass `include_details=true` only when debugging a failed nested check.
+- `bubble_task_runbook`: returns a one-call compact runbook for a Bubble task, including route intents, ordered recipe steps, execution policy, quality gates, stop conditions, verification steps, safeguards, compact relevant tool matches, and optional profile readiness. Use this as the preferred planning call for agents.
+- `bubble_agent_guide`: returns a compact routing guide for agents. Call it
+  with the user task when the client is unsure which Bubble MCP tool family to
+  use; it is read-only and avoids CLI/repository discovery.
+- `bubble_tool_search`: searches the exposed MCP tool catalog and returns
+  compact matching metadata. Use it for narrow discovery such as `html selector`,
+  `workflow action`, or `branch changelog` instead of loading the full catalog.
+- `bubble_task_recipe`: returns a compact ordered recipe for a task, including
+  preflight checks, tool sequence, arguments to fill, execution policy, quality
+  gates, stop conditions, safeguards, and verification guidance. Use it when
+  the agent knows the intent but needs the execution sequence.
+- `bubble_tool_coverage`: reports whether exposed tools are handled by standalone native code, direct Aria-runtime dispatch, runtime alias dispatch, a custom runtime adapter, compiler fallback, or are uncovered. The default response is compact; pass `include_details=true` only when per-tool classifications are needed.
+- `bubble_catalog_quality`: audits tool/resource/prompt identifiers, descriptions, input schemas, explicit required fields for Aria-compatible tools, property descriptions, annotations, resource metadata, prompt arguments, runtime coverage, and packaged Bubble CLI-to-MCP parity. Use it as the catalog quality gate before claiming MCP/harness work is complete.
+- `bubble_runtime_smoke`: runs an operational smoke suite. `coverage` is local-only and validates both execution coverage and catalog quality, `agent-routing` validates natural-language tool selection for HTML import, page creation, Figma/style sync, branches/changelog, setup/context refresh, interactive login, workflow requests, and visual quality gates without writes, `visual-repair` validates actionable visual audit repair planning without writes, `safe-read` performs read-only checks, `preview-write` compiles representative mutations with `execute=false`, `family-preview` exercises representative visual/container/input/schema/workflow/style/HTML/branch/changelog paths without writes, and `execute-write` performs authenticated temporary writes only when `execute=true`. Use `verify_context=true` for real-write smokes that must refresh the Bubble context and confirm the temporary objects materialized; if `cleanup=true` is also set, cleanup runs after verification and the context is refreshed again after cleanup.
+- `bubble_visual_capture`: captures a structured visual reference snapshot from a URL, local HTML file, or raw HTML.
+- `bubble_visual_capture_actual`: captures the actual rendered Bubble app/preview output for a profile, app, page, or explicit URL after a write/import.
+- `bubble_visual_compare`: compares structured visual snapshots for layout, required text, image dimensions, typography, max-width, and gradient drift.
+- `bubble_visual_audit`: diagnoses visual drift, returns actionable issues, builds a repair plan, and can execute supported fixes when `execute=true`. Use snapshots or URL/Bubble captures for executable repairs; pass `reference_screenshot` and `actual_screenshot` when a multimodal LLM should review screenshots.
+- `bubble_profile_list`: lists configured local Bubble profiles.
+- `bubble_profile_cache_refresh`: refreshes a configured profile cache/context in one call. Use it directly for routine "refresh cache" requests instead of discovering local cache paths or lower-level CLI commands.
+- `bubble_context_summary`: summarizes a compact context JSON file.
+- `bubble_context_find`: searches the active compact context for a profile, or a local context JSON file for diagnostics. Prefer `profile` plus `exact=true` and `include_metadata=false` when validating that a specific node id, label, Bubble id, or context reference exists or is absent; responses include `count`, `truncated`, `match_field`, and `match_value`.
+- `bubble_context_import`: imports `.bubble`/consolelog or crawler-index JSON into compact context.
+- `bubble_plan`: creates a validated deterministic plan.
+- `bubble_plan_dry_run`: compatibility alias for `bubble_plan`.
+- `create_from_html`: Aria's advanced HTML importer. Pass `profile`, `app_id`, `context`, `parent`, and `url`, `html_file`, or `html`; set `selector` for targeted imports and `execute=true` to write to Bubble.
+- `create_styles_from_html`: extracts Bubble style definitions from a URL, HTML file, or raw HTML snippet. Pass explicit `style_name`, `element_type`, and `selector`; existing styles with the same identity are updated, otherwise a new style is created. URL sources use rendered DOM/computed styles by default. Use it before `create_from_html` when hover, focus, disabled, pressed, or reusable component style definitions should be created separately.
+- `bubble_compile_plan`: compiles supported abstract plan steps into Bubble write payloads.
+- `bubble_eval_run`: runs a deterministic planning eval dataset. Pass `compile=true` and `app_id` to include compiler coverage, token estimates, parser summary, and fallback reasons; pass `filter`, `failed_from`, `offset`, or `limit` for focused reruns.
+- `bubble_session_list`: lists locally imported Bubble editor sessions.
+- `bubble_session_login`: captures and stores a Bubble editor session through a
+  local interactive browser.
+- `bubble_session_import`: imports session headers/cookies into local storage.
+- `bubble_editor_write`: posts an exact Bubble `/appeditor/write` payload. Set `execute=true` to mutate Bubble.
+- `bubble_execute_plan`: executes plan steps. Set `compile=true` with `app_id` to compile supported abstract steps before execution. Set `execute=true` to mutate Bubble.
+- `bubble_transfer_inventory`: inspects a source profile page, reusable, or
+  element subtree before project-to-project transfer. Read-only.
+- `bubble_transfer_plan`: creates a local preview-first transfer plan from a
+  source profile to a target profile. By default, it reuses exact or
+  structurally compatible target resources before planning new copies.
+- `bubble_transfer_preview`: previews an existing local transfer plan against
+  the target profile session. Use `include_payloads=true` only for payload
+  review.
+- `bubble_transfer_execute`: executes a reviewed transfer plan against the
+  target profile. Requires `execute=true` and `confirm=true`.
+- `bubble_transfer_status`: reads a stored local transfer plan by id.
+- `bubble_schedule_deploy`: schedules a browser-assisted deploy to live from
+  Bubble's fixed `test` app version. Always call it first with `execute=false`
+  and show the returned `preview_id`, `scheduled_at`, `timezone`, and `message`
+  to the user. Only call again with `execute=true`, `confirm=true`, and the
+  matching `preview_id` after explicit confirmation.
+- `bubble_list_scheduled_deploys`: lists currently scheduled deploys for one
+  profile and rearms pending records in the running MCP process.
+- `bubble_cancel_scheduled_deploy`: cancels a scheduled deploy by id and records
+  the cancellation in profile-local deploy history.
+- `bubble_deploy_history`: lists scheduled deploy history created by this tool,
+  including scheduled, cancelled, executed, and failed records.
+- `batch`: runs multiple explicit Bubble catalog commands with inline `commands`. Use the `command_batch` recipe from `bubble_task_runbook` for requests that combine edits such as text updates, color token changes, and element deletion in one prompt.
+- `bubble_branch_list`: lists Bubble editor branches/versions for the selected profile.
+- `bubble_branch_contributors`: lists collaborators who contributed to a branch/version.
+- `bubble_changelog_fetch`: fetches editor changelog entries with optional date, user, category, root, identifier, and path filters.
+- `bubble_branch_create`: creates a Bubble branch or sub-branch. Pass `from_app_version` for sub-branches and `execute=true` to apply it.
+- `bubble_branch_delete`: soft-deletes a Bubble branch/version. Requires `execute=true` and `confirm=true` to apply it.
+- `bubble_performance_audit`: answers broad Bubble performance, WU, workload,
+  log, usage, storage, or workflow-run questions from direct Bubble editor
+  sources. Defaults log analysis to `app_version=live`.
+- `bubble_workload_usage_by_date`: reads workload usage grouped by minute,
+  hour, or day for a profile and date range.
+- `bubble_workload_usage_breakdown`: reads workload breakdown by tags such as
+  workflow, elasticsearch, or app editor categories for a profile and date
+  range.
+- `bubble_logs_fetch`: fetches Bubble runtime logs for a profile and time
+  range. Defaults to `app_version=live`.
+- `bubble_plan_usage_get`: reads the current app plan/usage snapshot.
+- `bubble_workflow_runs_get`: reads workflow-run usage metadata.
+- `bubble_storage_usage_get`: reads current app storage usage.
+- `bubble_time_series_read`: reads a Bubble editor time-series metric such as
+  page views for a timestamp range.
+
+Mutating calls require a stored local session. Calls without `execute=true`
+return a preview instead of posting to Bubble.
+
+## Agent Selection Rules
+
+- If the user names a profile and asks for Bubble app work, call the MCP tool
+  that matches the requested capability.
+- If the client supports MCP resources, read `bubble://docs/agent-quickstart`
+  before the first Bubble task in a session.
+- If the correct tool family or sequence is unclear, call `bubble_task_runbook`
+  with the user's task/profile/context and use its route, recipe, and compact
+  tool matches before inspecting CLI help.
+- Treat the runbook's `quality_gates`, `stop_conditions`, and `verification`
+  fields as the active harness contract for the task. For HTML/Figma visual
+  work, do not treat a Bubble write response alone as success; capture actual
+  output and run `bubble_visual_audit` when source snapshots or screenshots are
+  available.
+- If the client supports MCP resources, read `bubble://docs/agent-runtime`
+  before broad Bubble work.
+- If the client supports MCP prompts, use `bubble-task-runbook` for ambiguous
+  user tasks that require a multi-step execution sequence.
+- If the client only needs candidate tools for a narrow capability, call
+  `bubble_tool_search` with a short query instead of reasoning over the full
+  `tools/list` payload.
+- After selecting one tool, read `bubble://tools/{tool_name}` when exact
+  argument names or annotations are needed. Do this instead of loading all
+  tool schemas.
+- If the client only needs route-family guidance, call `bubble_agent_guide`.
+  If it only needs the ordered sequence after the family is known, call
+  `bubble_task_recipe`.
+- Before relying on a modified catalog or harness, call `bubble_readiness_check`
+  and require `ok=true`. Use individual smoke suites only for deeper diagnosis.
+- Before applying a user-requested mutation to a project profile, call
+  `bubble_profile_status` and inspect `ready` plus `next_actions`.
+- Do not ask the user to memorize internal tool names; infer the right tool
+  from the intent, then pass the visible app/page/element names as arguments.
+- Do not shell out to inspect CLI help unless a required capability is missing
+  from `tools/list`.
+- Prefer profile-based calls over manual `app_id` payload construction because
+  profile calls can use the stored `.bubble` context, mutation overlay, session,
+  and Aria-compatible runtime.
+- Use `execute=false` for previews and `execute=true` only when the user asked
+  to apply the change.
+
+For schema maintenance and adding new tool families, see
+[`tool-schema-development.md`](tool-schema-development.md).

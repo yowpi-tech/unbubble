@@ -1,0 +1,924 @@
+"""Dispatch standalone MCP catalog calls through Aria's Bubble runtime."""
+
+from __future__ import annotations
+
+from copy import deepcopy
+import importlib
+import inspect
+import sys
+from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import dataclass
+from io import StringIO
+from pathlib import Path
+from typing import Any, cast
+
+from bubble_mcp.context.detector import (
+    default_bubble_export_path,
+    default_crawler_index_path,
+    detect_project_context,
+    refresh_bubble_export,
+)
+from bubble_mcp.context.mutation_overlay import mutation_overlay_path, record_mutation_overlay
+from bubble_mcp.core.config import load_settings, resolve_config_artifact_path, resolve_profile
+from bubble_mcp.core.redaction import SENSITIVE_KEY_PATTERN, redact_sensitive
+from bubble_mcp.execution.client import BubbleEditorClient
+from bubble_mcp.sessions.store import load_session
+from bubble_mcp.visual_defaults import (
+    enforce_visual_create_payload_quality,
+    style_metadata_from_artifact,
+    style_metadata_from_payload,
+)
+
+
+CONTROL_ARG_KEYS = {
+    "profile",
+    "app_id",
+    "appname",
+    "app_version",
+    "execute",
+    "dry_run",
+    "settings_path",
+    "context_file",
+    "write_payload",
+    "payload",
+    "refresh_context",
+    "force",
+    "bubble_file",
+    "app_json_path",
+    "consolelog_file",
+    "crawler_index_path",
+    "mutation_overlay_path",
+}
+
+ARG_ALIASES = {
+    "context_name": ("context",),
+    "parent_name": ("parent",),
+    "filter_text": ("query",),
+    "html_file": ("file",),
+    "file_path": ("file", "input"),
+    "as_json": ("json",),
+    "search_text": ("element_name", "name", "text"),
+    "new_text": ("content", "new_content", "text"),
+    "name": ("element_name",),
+    "style_name": ("name",),
+    "order_list": ("order",),
+    "property_name": ("property",),
+    "condition_json": ("only_when_json", "condition"),
+    "query": ("message", "commands"),
+    "icon_name": ("icon",),
+    "source": ("image_url", "url"),
+    "data_type_key": ("data_type_ref", "data_type"),
+    "field_name": ("name",),
+    "field_type": ("type",),
+    "option_set_key": ("option_set_ref",),
+    "value_type": ("type",),
+    "value_ref": ("option_value_ref",),
+    "new_label": ("new_name",),
+    "assignments": ("order",),
+    "rgba": ("value", "color"),
+    "event_type": ("event",),
+    "action_param": ("param",),
+    "to_email": ("to",),
+    "reusable_name": ("source", "reusable"),
+}
+
+OPERATION_ARG_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
+    "set_app_setting": {"path": ("name",)},
+    "set_project_setting": {"setting_key": ("name",)},
+    "set_data_type_api_exposure": {"enabled": ("value",)},
+    "rename_data_field": {"field_key": ("name", "field_name")},
+    "delete_data_field": {"field_key": ("name", "field_name")},
+    "create_option_value": {"label": ("name",)},
+    "set_option_value_attribute": {"attribute_key": ("name",)},
+    "delete_301_redirect": {"rule_key": ("name",)},
+}
+
+
+def public_aliases_for_runtime_parameter(
+    method_name: str,
+    parameter_name: str,
+) -> tuple[str, ...]:
+    """Return the aliases actually consulted by runtime dispatch."""
+
+    operation_aliases = OPERATION_ARG_ALIASES.get(method_name, {})
+    if parameter_name in operation_aliases:
+        return operation_aliases[parameter_name]
+    return ARG_ALIASES.get(parameter_name, ())
+
+RUNTIME_TOOL_ALIASES = {
+    "sync_cache": "refresh_profile_cache",
+    "list_events": "list_workflow_events",
+    "scan_types": "list_data_types",
+    "update_layout": "update_layout_property",
+    "edit_style": "update_style_definition",
+    "map_element_ref": "map_element_ref_alias",
+    "map_workflow_ref": "map_workflow_ref_alias",
+    "add_event_go_to_page": "add_event_go_to_page_action",
+    "set_condition_run_when": "set_condition_event_run_when",
+    "set_condition_only_when": "set_condition_event_only_when",
+    "batch": "process_batch",
+    "natural": "process_natural_language",
+    "regenerate_api_token": "regenerate_api_token_private_key",
+}
+
+CUSTOM_RUNTIME_TOOLS = {"list_element_ref_maps"}
+
+MUTATING_PREFIXES = (
+    "add_",
+    "assign_",
+    "create_",
+    "delete_",
+    "import_",
+    "move_",
+    "replace_",
+    "set_",
+    "sync_",
+    "update_",
+)
+
+
+def _css_px(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        number = int(value) if float(value).is_integer() else value
+        return f"{number}px"
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.replace(".", "", 1).isdigit():
+        return f"{text}px"
+    return text
+
+
+def _first_present(*values: Any) -> Any | None:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _normalize_fixed_size_properties(properties: dict[str, Any]) -> None:
+    # Explicit responsive CSS lengths take priority over the legacy %w/%h ints:
+    # builders default %w/%h to 100 and never sync them with min_width/min_height
+    # args, so preferring %w silently rewrote explicit sizes (a 19px dot became
+    # a 100px square). %w/%h remain the fallback for legacy fixed-size payloads.
+    if properties.get("fixed_width") is True or properties.get("single_width") is True:
+        width_css = _css_px(
+            _first_present(properties.get("max_width_css"), properties.get("min_width_css"), properties.get("%w"))
+        )
+        if width_css is not None:
+            properties["min_width_css"] = width_css
+            properties["max_width_css"] = width_css
+    if properties.get("fixed_height") is True or properties.get("single_height") is True:
+        height_css = _css_px(
+            _first_present(properties.get("max_height_css"), properties.get("min_height_css"), properties.get("%h"))
+        )
+        if height_css is not None:
+            properties["min_height_css"] = height_css
+            properties["max_height_css"] = height_css
+
+
+def _normalize_fixed_size_create_payload(
+    payload: dict[str, Any],
+    *,
+    style_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    changes = payload.get("changes")
+    if not isinstance(changes, list):
+        return payload
+    for change in changes:
+        if not isinstance(change, dict):
+            continue
+        if change.get("intent", {}).get("name") != "CreateElement":
+            continue
+        body = change.get("body")
+        if not isinstance(body, dict):
+            continue
+        properties = body.get("%p")
+        if isinstance(properties, dict):
+            _normalize_fixed_size_properties(properties)
+        enforce_visual_create_payload_quality(body, metadata=style_metadata)
+    return payload
+
+
+_ERROR_LOG_MARKERS = ("\u274c", "Unsupported", "Invalid", "not found", "Missing", "required", "Failed", "Refusing")
+
+
+def _extract_error_from_logs(logs: str) -> str | None:
+    """Surface the most recent human-readable failure line from captured runtime logs.
+
+    Aria tools report failures by printing and returning False; without this, the MCP
+    result carries ok=false with no reason and agents must parse raw logs.
+    """
+
+    for line in reversed(str(logs or "").splitlines()):
+        text = line.strip()
+        if not text:
+            continue
+        if any(marker in text for marker in _ERROR_LOG_MARKERS):
+            return text.lstrip("\u274c \u26a0\ufe0f").strip() or text
+    return None
+
+
+def _requires_calculate_derived(tool_name: str) -> bool:
+    """Return true for schema writes that Bubble finalizes through calculate_derived."""
+    return tool_name in {
+        "delete_data_field",
+        "create_privacy_rule",
+        "delete_privacy_rule",
+        "set_privacy_rule_name",
+        "set_privacy_rule_condition",
+        "set_privacy_rule_permission",
+        "set_privacy_rule_field_visibility",
+        "set_privacy_rule_auto_binding",
+    }
+
+
+def _delete_data_type_follow_up(
+    tool_name: str,
+    *,
+    ok: bool,
+    execute: bool,
+    profile: str | None = None,
+    app_id: str | None = None,
+    app_version: str | None = None,
+    data_type_ref: str | None = None,
+) -> dict[str, Any] | None:
+    if tool_name != "delete_data_type" or not ok or not execute:
+        return None
+    target_name = data_type_ref or "unknown"
+    target_branch = app_version or "unknown"
+    return {
+        "action": "ask_whether_to_delete_data_type_permanently",
+        "question": (
+            f"Data type '{target_name}' was soft-deleted in branch '{target_branch}'. "
+            "Do you want to delete this exact data type permanently? "
+            "Permanent deletion cannot be undone."
+        ),
+        "tool_name": "delete_data_type_permanently",
+        "requires_new_confirmation": True,
+        "target": {
+            "profile": profile,
+            "app_id": app_id,
+            "app_version": app_version,
+            "data_type_ref": data_type_ref,
+        },
+    }
+
+
+@dataclass(frozen=True)
+class AriaRuntimeEnvironment:
+    profile: str
+    app_id: str
+    app_version: str
+    app_json_path: str | None
+    consolelog_json_path: str | None
+    crawler_index_path: str | None
+    mutation_overlay_path: str | None
+
+
+class _FakeInquirer:
+    class List:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+    class Text:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+    @staticmethod
+    def prompt(_questions: Any) -> None:
+        return None
+
+
+def _load_aria_runtime_modules() -> tuple[Any, Any]:
+    runtime_dir = Path(__file__).resolve().parent / "aria_runtime"
+    runtime_path = str(runtime_dir)
+    if runtime_path not in sys.path:
+        sys.path.insert(0, runtime_path)
+    bubble_cli = importlib.import_module("bubble_cli")
+    bubble_sdk = importlib.import_module("bubble_sdk")
+    setattr(bubble_cli, "inquirer", _FakeInquirer())
+    return bubble_cli, bubble_sdk
+
+
+def _resolve_optional_path(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _resolve_runtime_environment(
+    args: dict[str, Any],
+    *,
+    authoritative_refresh: bool = False,
+) -> AriaRuntimeEnvironment:
+    profile = str(args.get("profile") or "").strip()
+    if not profile:
+        raise ValueError("Aria runtime dispatch requires profile.")
+
+    settings = load_settings()
+    profile_config = resolve_profile(settings, profile)
+    session = load_session(profile)
+    app_id = str(
+        args.get("app_id")
+        or args.get("appname")
+        or (session.app_id if session else "")
+        or (profile_config.app_id if profile_config else "")
+    ).strip()
+    if not app_id:
+        raise ValueError(f"No Bubble app_id found for profile '{profile}'.")
+
+    app_version = str(
+        args.get("app_version")
+        or (session.app_version if session and session.app_version else "")
+        or (profile_config.app_version if profile_config and profile_config.app_version else "")
+        or "test"
+    )
+
+    explicit_bubble_file = _resolve_optional_path(args.get("bubble_file") or args.get("app_json_path"))
+    app_json_path: str | None
+    if authoritative_refresh:
+        forbidden_overrides = (
+            "bubble_file",
+            "app_json_path",
+            "consolelog_file",
+            "crawler_index_path",
+            "mutation_overlay_path",
+        )
+        supplied_overrides = [key for key in forbidden_overrides if _resolve_optional_path(args.get(key))]
+        if supplied_overrides:
+            raise ValueError(
+                "Permanent data type deletion does not accept caller-supplied context artifacts: "
+                + ", ".join(supplied_overrides)
+                + "."
+            )
+        app_json_path = str(
+            refresh_bubble_export(
+                profile=profile,
+                app_id=app_id,
+                app_version=app_version,
+            )
+        )
+    else:
+        configured_app_json_path = resolve_config_artifact_path(
+            settings.config_dir,
+            profile_config.app_json_path if profile_config else None,
+        )
+        app_json_path = explicit_bubble_file or (
+            str(configured_app_json_path) if configured_app_json_path else None
+        )
+    default_export = default_bubble_export_path(profile, app_id)
+    if not app_json_path and default_export.exists():
+        app_json_path = str(default_export)
+
+    explicit_consolelog_file = _resolve_optional_path(args.get("consolelog_file"))
+    configured_consolelog_path = resolve_config_artifact_path(
+        settings.config_dir,
+        profile_config.consolelog_json_path if profile_config else None,
+    )
+    consolelog_json_path = explicit_consolelog_file or (
+        str(configured_consolelog_path) if configured_consolelog_path else None
+    )
+
+    # A crawler index registered on the profile (or sitting at its default location) is a
+    # usable data source. Without this check every tool call re-ran detection: a failing
+    # .bubble download plus a browser crawl before any work could start.
+    resolved_crawler_index_path = _resolve_optional_path(
+        args.get("crawler_index_path")
+        or (profile_config.crawler_index_path if profile_config else None)
+    )
+    if resolved_crawler_index_path and not Path(resolved_crawler_index_path).expanduser().exists():
+        resolved_crawler_index_path = None
+    if not resolved_crawler_index_path:
+        default_crawler = default_crawler_index_path(profile, app_id)
+        if default_crawler.exists():
+            resolved_crawler_index_path = str(default_crawler)
+
+    has_local_artifact = bool(
+        (app_json_path and Path(app_json_path).expanduser().exists())
+        or (consolelog_json_path and Path(consolelog_json_path).expanduser().exists())
+        or (resolved_crawler_index_path and Path(resolved_crawler_index_path).expanduser().exists())
+    )
+    should_detect = not authoritative_refresh and (
+        bool(args.get("refresh_context") or args.get("force")) or not has_local_artifact
+    )
+    if should_detect:
+        try:
+            detected = detect_project_context(
+                profile=profile,
+                app_id=app_id,
+                app_version=app_version,
+                force=bool(args.get("refresh_context") or args.get("force")),
+                bubble_file=Path(explicit_bubble_file).expanduser() if explicit_bubble_file else None,
+                consolelog_file=Path(consolelog_json_path).expanduser() if consolelog_json_path else None,
+            )
+        except ValueError:
+            # Detection needs a session or local artifact; a previously detected crawler
+            # index (checked below) is still a valid data source, so this is not fatal.
+            detected = None
+        candidate = default_bubble_export_path(profile, app_id)
+        if candidate.exists():
+            app_json_path = str(candidate)
+        elif detected is not None and detected.source.endswith("bubble") and Path(detected.context_path).exists():
+            app_json_path = app_json_path
+
+    if not resolved_crawler_index_path:
+        # Detection may have produced the index only now.
+        default_crawler = default_crawler_index_path(profile, app_id)
+        if default_crawler.exists():
+            resolved_crawler_index_path = str(default_crawler)
+
+    if not app_json_path and not consolelog_json_path and not resolved_crawler_index_path:
+        raise ValueError(
+            "Aria runtime dispatch requires a .bubble export, consolelog JSON, or crawler index. "
+            "Run bubble-mcp context detect for this profile first."
+        )
+
+    return AriaRuntimeEnvironment(
+        profile=profile,
+        app_id=app_id,
+        app_version=app_version,
+        app_json_path=app_json_path,
+        consolelog_json_path=consolelog_json_path,
+        crawler_index_path=resolved_crawler_index_path,
+        mutation_overlay_path=_resolve_optional_path(args.get("mutation_overlay_path"))
+        or str(mutation_overlay_path(profile, app_id)),
+    )
+
+
+def _method_kwargs(method: Any, args: dict[str, Any], *, execute: bool) -> dict[str, Any]:
+    signature = inspect.signature(method)
+    accepts_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values())
+    kwargs: dict[str, Any] = {}
+
+    for name, param in signature.parameters.items():
+        if name == "self" or param.kind in {
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        }:
+            continue
+        if name == "dry_run":
+            kwargs[name] = not execute
+            continue
+        if name in args:
+            kwargs[name] = args[name]
+            continue
+        aliases = public_aliases_for_runtime_parameter(method.__name__, name)
+        for alias in aliases:
+            if alias in args:
+                kwargs[name] = args[alias]
+                break
+
+    if accepts_kwargs:
+        for key, value in args.items():
+            if key in CONTROL_ARG_KEYS or key in kwargs:
+                continue
+            if key == "context":
+                continue
+            if key == "parent":
+                continue
+            kwargs.setdefault(key, value)
+
+    if method.__name__ == "add_event_go_to_page_action" and args.get("same_tab") is True:
+        kwargs["open_in_new_tab"] = False
+    if "dry_run" in signature.parameters:
+        kwargs["dry_run"] = not execute
+    return kwargs
+
+
+def _sensitive_payload_copy(payload: dict[str, Any]) -> dict[str, Any]:
+    safe_payload = deepcopy(payload)
+    changes = safe_payload.get("changes")
+    if isinstance(changes, list):
+        for change in changes:
+            if isinstance(change, dict) and "body" in change:
+                change["body"] = "[REDACTED]"
+    return safe_payload
+
+
+def _sensitive_string_literals(payload: dict[str, Any]) -> set[str]:
+    literals: set[str] = set()
+
+    def collect(value: Any) -> None:
+        if isinstance(value, dict):
+            for child in value.values():
+                collect(child)
+        elif isinstance(value, (list, tuple)):
+            for child in value:
+                collect(child)
+        elif isinstance(value, str) and value:
+            literals.add(value)
+
+    changes = payload.get("changes")
+    if isinstance(changes, list):
+        for change in changes:
+            if isinstance(change, dict) and "body" in change:
+                collect(change["body"])
+    return literals
+
+
+def _scrub_sensitive_literals(value: Any, literals: set[str]) -> Any:
+    redacted = redact_sensitive(value)
+    ordered = sorted(literals, key=len, reverse=True)
+
+    def scrub(candidate: Any) -> Any:
+        if isinstance(candidate, dict):
+            return {key: scrub(child) for key, child in candidate.items()}
+        if isinstance(candidate, list):
+            return [scrub(child) for child in candidate]
+        if isinstance(candidate, tuple):
+            return tuple(scrub(child) for child in candidate)
+        if isinstance(candidate, str):
+            for literal in ordered:
+                candidate = candidate.replace(literal, "[REDACTED]")
+        return candidate
+
+    return scrub(redacted)
+
+
+def _sanitize_sensitive_editor_result(
+    result: dict[str, Any], literals: set[str]
+) -> dict[str, Any]:
+    sensitive_text_branches = {
+        "debug",
+        "error",
+        "local_state_warning",
+        "message",
+        "reason",
+        "response",
+        "warning",
+        "warnings",
+    }
+
+    def sanitize(candidate: Any) -> Any:
+        if isinstance(candidate, dict):
+            output: dict[str, Any] = {}
+            for key, child in candidate.items():
+                key_text = str(key)
+                if SENSITIVE_KEY_PATTERN.search(key_text):
+                    output[key_text] = "[REDACTED]"
+                elif key_text == "payload" and isinstance(child, dict):
+                    output[key_text] = _sensitive_payload_copy(child)
+                elif key_text.lower() in sensitive_text_branches:
+                    output[key_text] = _scrub_sensitive_literals(child, literals)
+                else:
+                    output[key_text] = sanitize(child)
+            return output
+        if isinstance(candidate, list):
+            return [sanitize(child) for child in candidate]
+        if isinstance(candidate, tuple):
+            return tuple(sanitize(child) for child in candidate)
+        return candidate
+
+    return cast(dict[str, Any], sanitize(deepcopy(result)))
+
+
+def _list_element_ref_maps(cli: Any, args: dict[str, Any]) -> dict[str, Any]:
+    context_name = str(args.get("context") or "").strip()
+    rows: list[dict[str, Any]] = []
+    cache = cli._schema_element_refs_cache()
+    if context_name:
+        context_id, context_type = cli._find_context(context_name)
+        if not context_id:
+            return {"ok": False, "error": f"Context '{context_name}' not found.", "rows": []}
+        context_keys = [cli._cache_element_ref_context_key(context_id, context_type)]
+    else:
+        context_keys = sorted(cache)
+
+    for context_key in context_keys:
+        bucket = cache.get(context_key)
+        if not isinstance(bucket, dict):
+            continue
+        for alias_key, payload in sorted(bucket.items()):
+            if not isinstance(payload, dict):
+                continue
+            row = dict(payload)
+            row.setdefault("alias_key", alias_key)
+            row.setdefault("context_key", context_key)
+            rows.append(row)
+    limit = args.get("limit")
+    if isinstance(limit, int) and limit > 0:
+        rows = rows[:limit]
+    return {"ok": True, "rows": rows, "count": len(rows)}
+
+
+def _call_custom_runtime_tool(name: str, cli: Any, args: dict[str, Any]) -> dict[str, Any] | None:
+    if name == "list_element_ref_maps":
+        return _list_element_ref_maps(cli, args)
+    return None
+
+
+def merge_write_payloads(payloads: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Concatenate several editor write payloads into a single request.
+
+    Bubble accepts any number of changes in one /appeditor/write call, so a batch of
+    N commands does not need N round trips. Payloads must share appname/app_version;
+    the first one supplies both.
+    """
+    usable = [payload for payload in payloads if isinstance(payload, dict) and isinstance(payload.get("changes"), list)]
+    if not usable:
+        return None
+    merged = {key: value for key, value in usable[0].items() if key != "changes"}
+    changes: list[Any] = []
+    for payload in usable:
+        changes.extend(payload["changes"])
+    merged["changes"] = changes
+    return merged
+
+
+def dispatch_aria_runtime_tool(name: str, args: dict[str, Any]) -> dict[str, Any] | None:
+    """Execute an Aria BubbleCLI method when the standalone catalog tool maps to one."""
+
+    profile = str(args.get("profile") or "").strip()
+    if not profile:
+        return None
+
+    bubble_cli, bubble_sdk = _load_aria_runtime_modules()
+    method_name = RUNTIME_TOOL_ALIASES.get(name, name)
+    has_runtime_method = hasattr(bubble_cli.BubbleCLI, method_name)
+    if not has_runtime_method and name not in CUSTOM_RUNTIME_TOOLS:
+        return None
+    signature = inspect.signature(getattr(bubble_cli.BubbleCLI, method_name)) if has_runtime_method else None
+    if (
+        signature is not None
+        and not bool(args.get("execute"))
+        and name.startswith(MUTATING_PREFIXES)
+        and "dry_run" not in signature.parameters
+    ):
+        return None
+
+    execute = args.get("execute") is True and args.get("dry_run") is not True
+    if name == "delete_data_type_permanently" and "confirm" in args and not isinstance(args.get("confirm"), bool):
+        raise ValueError("delete_data_type_permanently requires confirm to be a boolean.")
+    session = load_session(profile)
+    if execute and session is None:
+        raise ValueError(f"No Bubble session stored for profile '{profile}'.")
+
+    if name == "delete_data_type_permanently" and execute:
+        env = _resolve_runtime_environment(args, authoritative_refresh=True)
+    else:
+        env = _resolve_runtime_environment(args)
+    style_metadata: dict[str, Any] = {}
+    captured_payloads: list[dict[str, Any]] = []
+    captured_results: list[dict[str, Any]] = []
+    buffered_payloads: list[dict[str, Any]] = []
+    merge_writes = name == "batch"
+    batch_contains_sensitive_payload = False
+    captured_builder_ids: set[int] = set()
+    sensitive_literals: set[str] = set()
+    original_builder_init = bubble_sdk.PayloadBuilder.__init__
+    builder_init_signature = inspect.signature(original_builder_init)
+    builder_accepts_app_version = "app_version" in builder_init_signature.parameters or any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in builder_init_signature.parameters.values()
+    )
+    original_send = bubble_sdk.PayloadBuilder.send_to_webhook
+    original_to_json = bubble_sdk.PayloadBuilder.to_json
+
+    def init_builder_with_target_version(builder: Any, *init_args: Any, **init_kwargs: Any) -> None:
+        if (
+            builder_accepts_app_version
+            and len(init_args) < 2
+            and not str(init_kwargs.get("app_version") or "").strip()
+        ):
+            init_kwargs["app_version"] = env.app_version
+        original_builder_init(builder, *init_args, **init_kwargs)
+
+    def capture_payload(builder: Any, *, sensitive: bool = False) -> dict[str, Any]:
+        builder_id = id(builder)
+        write_payload = cast("dict[str, Any]", builder.build())
+        write_payload["app_version"] = env.app_version
+        _normalize_fixed_size_create_payload(write_payload, style_metadata=style_metadata)
+        if builder_id not in captured_builder_ids:
+            captured_builder_ids.add(builder_id)
+            if sensitive:
+                sensitive_literals.update(_sensitive_string_literals(write_payload))
+                captured_payloads.append(_sensitive_payload_copy(write_payload))
+            else:
+                captured_payloads.append(write_payload)
+        return write_payload
+
+    def send_to_local_bubble(builder: Any, _url: str = "", *, sensitive: bool = False) -> Any:
+        nonlocal batch_contains_sensitive_payload
+        write_payload = capture_payload(builder, sensitive=sensitive)
+        safe_payload = _sensitive_payload_copy(write_payload) if sensitive else write_payload
+        if execute and merge_writes:
+            # One command in a batch = one payload; they are flushed together below.
+            buffered_payloads.append(write_payload)
+            batch_contains_sensitive_payload = batch_contains_sensitive_payload or sensitive
+            return {"ok": True, "deferred": True, "payload": safe_payload}
+        if not execute:
+            result = {"ok": True, "dry_run": True, "payload": safe_payload}
+            captured_results.append({"ok": True, "executed": False, "dry_run": True, "payload": safe_payload})
+            return result
+        assert session is not None
+        result = BubbleEditorClient().write(
+            write_payload,
+            session,
+            dry_run=False,
+            calculate_derived=_requires_calculate_derived(name),
+        )
+        safe_result = (
+            _sanitize_sensitive_editor_result(result, sensitive_literals)
+            if sensitive
+            else result
+        )
+        captured_results.append({"ok": bool(result.get("ok")), "executed": True, "result": safe_result})
+        if result.get("ok"):
+            if not sensitive:
+                request = result.get("request")
+                request_payload = request.get("payload") if isinstance(request, dict) else None
+                overlay_payload = request_payload if isinstance(request_payload, dict) else write_payload
+                try:
+                    record_mutation_overlay(
+                        profile=profile,
+                        app_id=str(overlay_payload.get("appname") or env.app_id),
+                        payload=overlay_payload,
+                        source=name,
+                        response=result.get("response"),
+                    )
+                except Exception as exc:
+                    warning = f"Remote write succeeded, but the local mutation overlay could not be persisted: {exc}"
+                    captured_results[-1]["local_state_warning"] = warning
+                    result["local_state_warning"] = warning
+            return safe_result
+        if sensitive:
+            raise RuntimeError("Sensitive Bubble write failed")
+        raise RuntimeError(str(result.get("error") or result.get("reason") or "Bubble write failed"))
+
+    def to_json_with_capture(builder: Any) -> str:
+        write_payload = capture_payload(builder)
+        if not execute:
+            captured_results.append({"ok": True, "executed": False, "dry_run": True, "payload": write_payload})
+        return cast(str, original_to_json(builder))
+
+    stdout = StringIO()
+    stderr = StringIO()
+    return_value: Any = None
+    token_sync_result: dict[str, Any] | None = None
+    try:
+        bubble_sdk.PayloadBuilder.__init__ = init_builder_with_target_version
+        bubble_sdk.PayloadBuilder.send_to_webhook = send_to_local_bubble
+        bubble_sdk.PayloadBuilder.to_json = to_json_with_capture
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            cli = bubble_cli.BubbleCLI(
+                app_json_path=env.app_json_path,
+                consolelog_json_path=env.consolelog_json_path,
+                crawler_index_path=env.crawler_index_path,
+                mutation_overlay_path=env.mutation_overlay_path,
+                appname=env.app_id,
+                webhook_url="local://bubble-mcp",
+                profile_name=env.profile,
+                app_version=env.app_version,
+            )
+            discovery = getattr(cli, "discovery", None)
+            discovery_data = getattr(discovery, "data", None)
+            style_metadata = style_metadata_from_payload(discovery_data)
+            if not style_metadata:
+                style_metadata = style_metadata_from_artifact(
+                    env.app_json_path or env.crawler_index_path or env.consolelog_json_path
+                )
+            custom_return = _call_custom_runtime_tool(name, cli, args)
+            if custom_return is not None:
+                return_value = custom_return
+            elif name == "batch" and isinstance(args.get("commands"), list):
+                return_value = cli.execute_commands(args["commands"], dry_run=not execute)
+            else:
+                method = getattr(cli, method_name)
+                return_value = method(**_method_kwargs(method, args, execute=execute))
+            if name == "sync_figma_tokens":
+                raw_token_result = getattr(cli, "_last_figma_token_sync_result", None)
+                if isinstance(raw_token_result, dict):
+                    token_sync_result = deepcopy(raw_token_result)
+    finally:
+        bubble_sdk.PayloadBuilder.__init__ = original_builder_init
+        bubble_sdk.PayloadBuilder.send_to_webhook = original_send
+        bubble_sdk.PayloadBuilder.to_json = original_to_json
+
+    if buffered_payloads:
+        merged_payload = merge_write_payloads(buffered_payloads)
+        if merged_payload is not None:
+            assert session is not None
+            merged_result = BubbleEditorClient().write(
+                merged_payload,
+                session,
+                dry_run=False,
+                calculate_derived=_requires_calculate_derived(name),
+            )
+            safe_merged_result = (
+                _sanitize_sensitive_editor_result(merged_result, sensitive_literals)
+                if batch_contains_sensitive_payload
+                else merged_result
+            )
+            captured_results.append(
+                {
+                    "ok": bool(merged_result.get("ok")),
+                    "executed": True,
+                    "merged_from": len(buffered_payloads),
+                    "result": safe_merged_result,
+                }
+            )
+            if merged_result.get("ok") and not batch_contains_sensitive_payload:
+                request = merged_result.get("request")
+                request_payload = request.get("payload") if isinstance(request, dict) else None
+                overlay_payload = request_payload if isinstance(request_payload, dict) else merged_payload
+                try:
+                    record_mutation_overlay(
+                        profile=profile,
+                        app_id=str(overlay_payload.get("appname") or env.app_id),
+                        payload=overlay_payload,
+                        source=name,
+                        response=merged_result.get("response"),
+                    )
+                except Exception as exc:
+                    warning = f"Remote write succeeded, but the local mutation overlay could not be persisted: {exc}"
+                    captured_results[-1]["local_state_warning"] = warning
+
+    logs = "\n".join(part for part in (stdout.getvalue().strip(), stderr.getvalue().strip()) if part)
+    if sensitive_literals:
+        logs = cast(str, _scrub_sensitive_literals(logs, sensitive_literals))
+    ok = bool(return_value) if captured_results else return_value is not False
+    if captured_results:
+        ok = all(bool(item.get("ok")) for item in captured_results)
+    error = None if ok else _extract_error_from_logs(logs)
+    response = {
+        "ok": ok,
+        **({"error": error} if error else {}),
+        "engine": "aria_runtime",
+        "tool_name": name,
+        "profile": profile,
+        "app_id": env.app_id,
+        "app_version": env.app_version,
+        "executed": execute,
+        "compiled": bool(captured_payloads),
+        "write_count": len(captured_payloads),
+        "return_value": return_value,
+        "results": [{"index": index, **item} for index, item in enumerate(captured_results, start=1)],
+        "logs": logs,
+    }
+    if name == "sync_figma_tokens":
+        response["figma_import"] = {
+            "result": token_sync_result or {},
+            "plan": deepcopy((token_sync_result or {}).get("payloads") or []),
+        }
+    local_state_warnings = [
+        str(item["local_state_warning"])
+        for item in captured_results
+        if item.get("local_state_warning")
+    ]
+    if local_state_warnings:
+        response["warnings"] = local_state_warnings
+    follow_up = _delete_data_type_follow_up(
+        name,
+        ok=ok and not local_state_warnings,
+        execute=execute,
+        profile=profile,
+        app_id=env.app_id,
+        app_version=env.app_version,
+        data_type_ref=str(
+            args.get("data_type_ref") or args.get("data_type") or args.get("data_type_key") or ""
+        ).strip()
+        or None,
+    )
+    if follow_up is not None:
+        response["follow_up"] = follow_up
+    if name == "delete_data_type_permanently" and ok and execute:
+        target_key = str(
+            args.get("data_type_ref") or args.get("data_type") or args.get("data_type_key") or ""
+        ).strip()
+        if target_key.lower().startswith("custom."):
+            target_key = target_key.split(".", 1)[1].strip()
+        try:
+            refreshed_export = refresh_bubble_export(
+                profile=profile,
+                app_id=env.app_id,
+                app_version=env.app_version,
+            )
+            refreshed_discovery = bubble_cli.PathDiscovery(str(refreshed_export), None, None, None)
+            refreshed_data = refreshed_discovery.data if isinstance(refreshed_discovery.data, dict) else {}
+            refreshed_types = refreshed_data.get("user_types")
+            verified_absent = isinstance(refreshed_types, dict) and target_key not in refreshed_types
+            response["verification"] = {
+                "status": "verified" if verified_absent else "not_verified",
+                "data_type_key": target_key,
+                "absent_from_fresh_export": verified_absent,
+                "source": str(refreshed_export),
+            }
+            if not verified_absent:
+                response.setdefault("warnings", []).append(
+                    "The remote write succeeded, but the data type is still present in the fresh export. "
+                    "Do not retry automatically; inspect the Bubble editor state."
+                )
+        except Exception as exc:
+            response["verification"] = {
+                "status": "unavailable",
+                "data_type_key": target_key,
+                "absent_from_fresh_export": False,
+                "error": str(exc),
+            }
+            response.setdefault("warnings", []).append(
+                "The remote write succeeded, but read-back verification was unavailable. "
+                "Do not retry automatically; refresh and inspect the Bubble editor state."
+            )
+    return response

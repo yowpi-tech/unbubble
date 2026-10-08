@@ -1,0 +1,117 @@
+"""Reusable MCP prompts for Bubble MCP clients."""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+PROMPTS: dict[str, dict[str, Any]] = {
+    "bubble-task-runbook": {
+        "name": "bubble-task-runbook",
+        "description": "Create a concise execution runbook for a Bubble task using this MCP server.",
+        "arguments": [
+            {"name": "task", "description": "User's Bubble task.", "required": True},
+            {"name": "profile", "description": "Local Bubble MCP profile.", "required": False},
+            {"name": "context", "description": "Target Bubble page/reusable/context.", "required": False},
+            {"name": "parent", "description": "Target parent container. Defaults to root.", "required": False},
+            {"name": "execute", "description": "Whether the user explicitly asked to apply the change.", "required": False},
+        ],
+    },
+    "bubble-html-import": {
+        "name": "bubble-html-import",
+        "description": "Plan an advanced HTML selector/URL import into Bubble using the MCP runtime.",
+        "arguments": [
+            {"name": "profile", "description": "Local Bubble MCP profile.", "required": True},
+            {"name": "context", "description": "Target Bubble page or reusable.", "required": True},
+            {"name": "parent", "description": "Target parent container. Defaults to root.", "required": False},
+            {"name": "url", "description": "Source URL to import from.", "required": False},
+            {"name": "selector", "description": "CSS selector for the target section/component.", "required": False},
+            {"name": "execute", "description": "Whether the user explicitly asked to apply the import.", "required": False},
+        ],
+    },
+    "bubble-quality-gate": {
+        "name": "bubble-quality-gate",
+        "description": "Generate a quality gate checklist for validating this MCP server/profile.",
+        "arguments": [
+            {"name": "profile", "description": "Local Bubble MCP profile.", "required": False},
+            {"name": "context", "description": "Target Bubble context for preview/family smoke.", "required": False},
+        ],
+    },
+}
+
+
+def list_prompts() -> list[dict[str, Any]]:
+    """Return MCP prompt descriptors."""
+
+    return list(PROMPTS.values())
+
+
+def get_prompt(name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Render one MCP prompt by name."""
+
+    args = arguments or {}
+    if name == "bubble-task-runbook":
+        task = str(args.get("task") or "<task>")
+        profile = str(args.get("profile") or "<profile>")
+        context = str(args.get("context") or "<context>")
+        parent = str(args.get("parent") or "root")
+        execute = str(args.get("execute") or "false").lower()
+        text = (
+            f"Use the Befree Bubble MCP to execute this Bubble task: {task}\n\n"
+            f"Target profile: {profile}\n"
+            f"Target context: {context}\n"
+            f"Target parent: {parent}\n"
+            f"Execute requested: {execute}\n\n"
+            "Do not inspect repository code, CLI help, or shell commands when the MCP catalog already exposes the "
+            "needed capability. Do not ask the user to memorize internal tool names; infer the tool family from "
+            "the task.\n\n"
+            "Call `bubble_task_runbook` first for normal Bubble work. If the target profile is missing or the user "
+            "provided a profile and app id for setup, call `bubble_project_bootstrap`. If readiness reports a missing "
+            "or mismatched session and the user can complete login, call `bubble_session_login`. If the profile is "
+            "unclear, call `bubble_profile_list` before asking the user. Then execute the runbook with the "
+            "task/profile/context/parent/execute values. Use the returned preflight and steps as the source of "
+            "truth. When resolving known pages, reusables, parents, "
+            "or elements, call `bubble_context_find` with profile, exact=true, and include_metadata=false. Preview "
+            "before real writes unless execute was explicitly requested, and verify real writes with context refresh, "
+            "compact context lookup, changelog, or smoke."
+        )
+    elif name == "bubble-html-import":
+        profile = str(args.get("profile") or "<profile>")
+        context = str(args.get("context") or "<context>")
+        parent = str(args.get("parent") or "root")
+        url = str(args.get("url") or "<url-or-html-source>")
+        selector = str(args.get("selector") or "<selector>")
+        execute = str(args.get("execute") or "false").lower()
+        text = (
+            "Import an HTML component into Bubble through the advanced MCP runtime.\n\n"
+            f"Use profile `{profile}`, context `{context}`, parent `{parent}`, source `{url}`, selector `{selector}`, "
+            f"and execute={execute}.\n\n"
+            "Do not search CLI help or repository code for this flow. Call `bubble_task_runbook` with an HTML import "
+            "task first. If the runbook/readiness indicates missing setup, use `bubble_project_bootstrap`; if the "
+            "session is missing or mismatched and the user can complete login, use `bubble_session_login`. Resolve "
+            "the target page/reusable with `bubble_context_find` using profile, exact=true, and include_metadata=false. Then call "
+            "`create_from_html` with rendered_html=true, refresh_context=true, and execute=false for preview. "
+            "Repeat with execute=true only if the user asked to apply the import and the preview is valid."
+        )
+    elif name == "bubble-quality-gate":
+        profile = str(args.get("profile") or "<profile>")
+        context = str(args.get("context") or "index")
+        text = (
+            "Validate the Befree Bubble MCP before claiming the work is complete.\n\n"
+            "Run or call these checks:\n"
+            f"1. `bubble_readiness_check` with profile={profile}, context={context}, parent=root.\n"
+            "2. If deeper profile confidence is needed, run `bubble_runtime_smoke` with suite=family-preview.\n"
+            "3. For real writes, use execute-write only when explicitly allowed and verify context afterward."
+        )
+    else:
+        raise ValueError(f"Unknown Bubble MCP prompt: {name}")
+
+    return {
+        "description": str(PROMPTS[name]["description"]),
+        "messages": [
+            {
+                "role": "user",
+                "content": {"type": "text", "text": text},
+            }
+        ],
+    }
