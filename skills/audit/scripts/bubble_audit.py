@@ -1219,9 +1219,11 @@ def load_provenance(export_path):
 
 # ------------------------------------------------------------------ progress state (round-trips with the report's Export)
 def journal_counts(entry):
-    """A cleanup-journal entry counts as deleted in the app when it was applied to the
-    development version itself, or to a branch that was later merged into it."""
-    return bool(entry.get('merged')) or str(entry.get('app_version') or '') == 'test'
+    """A cleanup-journal entry counts as deleted in the app when the call succeeded and it was
+    applied to the development version itself, or to a branch that was later merged into it."""
+    if not entry.get('ok', True):
+        return False
+    return bool(entry.get('merged')) or str(entry.get('app_version') or '').lower() in ('test', 'version-test')
 
 def load_state(paths):
     """Parse progress files into a set of '<category>:<id>' keys. Accepts one path or a list:
