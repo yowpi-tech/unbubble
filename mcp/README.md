@@ -25,8 +25,12 @@ commit, what is not shipped and why.
 ```bash
 python3 mcp/install.py                    # venv + dependencies + Chromium + private folders
 python3 mcp/install.py --register claude  # also register the MCP server in Claude Code (user scope)
-python3 mcp/launch.py doctor              # check everything
+python3 mcp/launch.py doctor              # check everything (--json: what the UnBubble console shows)
 ```
+
+`doctor` also lists the profiles with whether each has a session and when it was saved (file metadata
+only — it never reads session contents), the test-user roles captured for screen captures, and the
+exports downloaded per app (from their provenance sidecars).
 
 Then, once per app, **in a terminal** (a browser window opens; sign in with email, not Google):
 

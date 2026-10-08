@@ -21,6 +21,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 MCP_DIR = Path(__file__).resolve().parent
@@ -161,6 +162,22 @@ def _registered_hosts():
     return hosts
 
 
+def _mtime(path):
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).replace(microsecond=0).isoformat()
+    except OSError:
+        return None
+
+
+def _roles(app):
+    """Roles with a captured app session for an app (file names only — never the content)."""
+    folder = CONFIG / 'app-sessions' / ''.join(c if c.isalnum() or c in '-_.' else '_' for c in str(app or ''))
+    try:
+        return sorted(p.stem for p in folder.glob('*.json') if not p.name.endswith('.meta.json'))
+    except OSError:
+        return []
+
+
 def _profiles():
     try:
         settings = json.loads((CONFIG / 'settings.json').read_text(encoding='utf-8'))
@@ -168,14 +185,43 @@ def _profiles():
         return []
     out = []
     for name, profile in sorted((settings.get('profiles') or {}).items()):
-        session = CONFIG / 'sessions' / (''.join(c if c.isalnum() or c in '-_' else '_' for c in name) + '.json')
+        # a branch profile reuses its app's session (session_profile)
+        owner = profile.get('session_profile') or name
+        session = CONFIG / 'sessions' / (''.join(c if c.isalnum() or c in '-_' else '_' for c in owner) + '.json')
+        captured = session.exists()  # existence and date only: the content is never read
         out.append({
             'name': name,
             'app_id': profile.get('app_id'),
             'app_version': profile.get('app_version'),
             'session_profile': profile.get('session_profile'),
-            'session_captured': session.exists(),  # existence only: the content is never read
+            'session_captured': captured,
+            'session_updated': _mtime(session) if captured else None,
+            'app_sessions': _roles(profile.get('app_id')),
+            'rebuild_sessions': _roles('rebuild-%s' % profile.get('app_id')),
         })
+    return out
+
+
+def _exports():
+    """Exports downloaded by unbubble:connect, per app: how many and the newest one's provenance."""
+    out = {}
+    try:
+        folders = sorted(p for p in EXPORTS.iterdir() if p.is_dir())
+    except OSError:
+        return out
+    for folder in folders:
+        metas = []
+        for meta in folder.glob('*.bubble.meta.json'):
+            try:
+                data = json.loads(meta.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                continue
+            metas.append((str(data.get('fetched_at') or ''), meta.name[:-len('.meta.json')], data))
+        if metas:
+            fetched, file, data = max(metas)
+            out[folder.name] = {'count': len(metas), 'latest': {
+                'file': file, 'app_version': data.get('app_version'), 'fetched_at': fetched or None,
+                'sha256': data.get('sha256'), 'bytes': data.get('bytes')}}
     return out
 
 
@@ -209,6 +255,7 @@ def doctor(as_json=False):
     check('config folder private', CONFIG.exists() and (CONFIG.stat().st_mode & 0o077) == 0, str(CONFIG))
     report['hosts'] = _registered_hosts()
     report['profiles'] = _profiles()
+    report['exports'] = _exports()
     report['ok'] = all(c['ok'] for c in report['checks'])
     if as_json:
         print(json.dumps(report, indent=1))
