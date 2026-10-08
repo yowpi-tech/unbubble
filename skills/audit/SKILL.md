@@ -97,6 +97,8 @@ python3 scripts/bubble_audit.py export.bubble \
   --pages-csv audit.csv \    # ONLY if the user hands you a page-inventory CSV for THIS app (see below)
   --state progress.md \      # optional, repeatable: pre-check items already deleted (report Export
                              #   .md/.json, or the connected-mode cleanup journal — keys are merged)
+  --evidence ev.json \        # optional, repeatable: runtime evidence from the connected mode — a
+                             #   "logs: N×" badge on every candidate it checked (step 3b)
   --plugin-names names.json  # optional: extra {pluginId: name} to extend the bundled registry
 ```
 
@@ -107,6 +109,12 @@ on a 100 MB file. It never modifies the export.
 
 1. **Locate the export.** Ask for the `.bubble` file path if not given. These are usually in
    Downloads. They're large — never `cat`/read the whole file into context; the script streams it.
+   **Connected mode** (`unbubble:connect`, optional): when it is installed and the app has a session,
+   offer to download a fresh export of `test` instead —
+   `python3 <connect>/scripts/fetch_export.py --app <app-id> --version test` (`<connect>` = the
+   `unbubble:connect` skill folder: `skills/connect/` of the UnBubble checkout) — which keeps an
+   immutable copy per round and a provenance sidecar the report header shows (version, time, sha256).
+   It never touches live and fails loudly instead of handing back an old cached export.
 2. **Run the script** with `--out` pointing into the project folder:
    `~/UnBubble-Projects/<app>/audit/<app>-vN_unused_report.html` (N = audit round; create the
    folder if missing). Pass `--lang pt` for a Portuguese report if the user works in Portuguese.
@@ -120,11 +128,36 @@ on a 100 MB file. It never modifies the export.
    export first (re-export, or download it through `unbubble:connect`, which re-hydrates the
    definitions) and run the audit again. The report shows the same warning in red at the top, and
    `--json` carries it as `export_integrity`.
+3b. **Runtime evidence (connected mode, optional).** Static analysis cannot see callers from
+   outside the app: an exposed endpoint a partner calls, a webhook, a page opened by direct link, an
+   API call that does run. When connected mode is available, run it on this round's JSON and
+   regenerate the report with the evidence:
+
+   ```bash
+   python3 <connect>/scripts/runtime_evidence.py ~/UnBubble-Projects/<app>/audit/<app>-vN_audit.json \
+       --profile <app-id> --days 14
+   python3 scripts/bubble_audit.py <export> --out … --json … --state … \
+       --evidence ~/UnBubble-Projects/<app>/audit/runtime-evidence__<app>-vN.json
+   ```
+
+   Every checked candidate gets a badge: **logs: N×** (seen — likely in real use: review before
+   deleting; the connected-mode cleanup plan leaves these out), **logs: 0** (not seen in the window —
+   strengthens "unused", never proves it), **logs: ?** (no evidence). The header states the window
+   and the version read (live by default). Relay counts, never log rows; read
+   `<connect>/references/evidence.md` before interpreting.
 4. **Verify the report renders** if you have a browser/preview available (serve the folder with
    `python3 -m http.server` — note macOS blocks serving `~/Downloads`, so copy the HTML to a
    temp dir first, or write it there with `--out`).
-5. Offer follow-ups: a CSV/checklist export, a deeper dive on one category, or wiring the
-   deletions into a cleanup plan.
+5. Offer follow-ups: a CSV/checklist export, a deeper dive on one category, or applying the
+   deletions through the connected mode (step 6).
+6. **Apply the cleanup (connected mode, optional).** Instead of the owner deleting item by item in
+   the editor, the agent can apply the high-confidence deletions on a dedicated branch: plan →
+   batches previewed and approved by the owner one at a time → journal → fresh export of the branch
+   → audit round N+1 with `--state` (progress + journal) → the owner merges the branch, later
+   deploys, both by hand. Follow `<connect>/references/cleanup.md` exactly — it never writes to
+   live, never deletes what the owner kept or what the logs show running, and leaves reusable
+   definitions, backend workflows, plugins and API Connector calls to the owner (the MCP cannot
+   delete them).
 
 ## Confidence levels — this is the most important part to communicate
 
@@ -171,7 +204,9 @@ report trustworthy.
   external links remain undetectable), so keep framing the remainder as *candidates to review*.
 
 Always tell the user: **start with the high-confidence deletions; treat the page list as
-candidates to review, not a delete list.**
+candidates to review, not a delete list.** When runtime evidence was attached (step 3b), a
+**logs: N×** badge overrides the static verdict for that item — something the export calls unused
+is running — while **logs: 0** only narrows the review (the window and log retention are finite).
 
 ## Plugin names & marketplace links
 
@@ -284,4 +319,6 @@ The `--json` summary (`summary_version: 2`) gives every finding its tracker **`k
 plan, the console) never re-derive it. Backend and page custom events share the `customevent:`
 prefix; their `scope` field (`backend` / `page`) tells them apart. It also carries
 `export_integrity` (see step 3) and `provenance` — version, download time and sha256 when the export
-came through the connected mode with a `<export>.meta.json` sidecar (the report header shows it too).
+came through the connected mode with a `<export>.meta.json` sidecar (the report header shows it too),
+and, with `--evidence`, `runtime_evidence` (`by_key`: hits / first and last seen per tracker key,
+plus the window and the version read).

@@ -1218,6 +1218,40 @@ def load_provenance(export_path):
         return None
 
 # ------------------------------------------------------------------ progress state (round-trips with the report's Export)
+def load_evidence(paths, app_name):
+    """Runtime evidence written by the connected mode (unbubble:connect runtime_evidence.py):
+    per tracker key, how often the candidate shows up in the app's server logs in a window.
+    Repeatable; later files win for the same key. A file for another app is ignored."""
+    if isinstance(paths, str):
+        paths = [paths]
+    by_key, meta, used = {}, {}, 0
+    for path in paths or []:
+        try:
+            with open(path, encoding='utf-8') as f:
+                data = json.load(f)
+        except (OSError, ValueError) as exc:
+            log('evidence: cannot read', path, '-', exc)
+            continue
+        if not isinstance(data, dict) or not isinstance(data.get('candidates'), list):
+            log('evidence: not a runtime-evidence file, ignored:', path)
+            continue
+        if data.get('app') and data.get('app') != app_name:
+            log('evidence: file is for app %r, not %r - ignored: %s' % (data.get('app'), app_name, path))
+            continue
+        used += 1
+        meta = {'window': data.get('window') or {}, 'app_version': data.get('app_version'),
+                'method': data.get('method')}
+        for row in data['candidates']:
+            if isinstance(row, dict) and row.get('key'):
+                by_key[row['key']] = {'hits': row.get('hits'), 'first_seen': row.get('first_seen'),
+                                      'last_seen': row.get('last_seen'), 'coverage': row.get('coverage')}
+    if not used:
+        return None
+    counts = {'seen': sum(1 for v in by_key.values() if v['hits']),
+              'not_seen': sum(1 for v in by_key.values() if v['hits'] == 0),
+              'unknown': sum(1 for v in by_key.values() if v['hits'] is None)}
+    return dict(meta, by_key=by_key, counts=counts, files=used)
+
 def journal_counts(entry):
     """A cleanup-journal entry counts as deleted in the app when the call succeeded and it was
     applied to the development version itself, or to a branch that was later merged into it."""
@@ -1264,6 +1298,11 @@ STR = {
   'integ_b': '{m} de {n} definições de reutilizáveis aparecem no índice do editor sem o conteúdo no export ({h} vazias). Tudo o que existe dentro delas — navegação, option sets, estilos, elementos de plugin, workflows agendados — ficou invisível para esta análise, então achados de qualquer seção podem ser falsos positivos. Reexporte o app ou baixe o export pelo modo conectado (unbubble:connect), que reidrata as definições, e rode o audit de novo.',
   'integ_sample': 'Exemplos',
   'prov_label': 'export baixado pelo modo conectado', 'prov_version': 'versão',
+  'ev_t': 'Evidência de runtime (logs do servidor)',
+  'ev_b': 'logs de <span class="mono">{ver}</span>, {d} dias até {end}: <strong>{seen}</strong> candidato(s) vistos, {none} não vistos, {unk} sem evidência. Cada item avaliado ganha um selo “logs:”. “Não visto” cobre só essa janela e a retenção de logs do plano: reforça o “sem uso”, não prova.',
+  'ev_seen': 'logs: {n}×', 'ev_seen_t': 'Visto {n}× nos logs de {ver} em {d} dias (última vez {last}): provável uso real — revise antes de apagar.',
+  'ev_none': 'logs: 0', 'ev_none_t': 'Não visto nos logs de {ver} em {d} dias (só essa janela e a retenção do plano).',
+  'ev_unk': 'logs: ?', 'ev_unk_t': 'Sem evidência: a consulta falhou, foi parcial ou passou do limite de candidatos.',
   'how_body': 'Cada item tem um grau de confiança. Em Bubble, “não referenciado” nem sempre significa “seguro para excluir”: páginas têm URL pública própria (podem ser abertas por link direto, e-mail ou iframe/embed) e plugins podem rodar no servidor sem elemento visível. Backend workflows, option sets, reutilizáveis e estilos têm sinais determinísticos e alta confiança.',
   'c_pages': 'Páginas sem navegação interna', 'c_reuse': 'Reutilizáveis não usados',
   'c_back': 'Backend workflows inalcançáveis', 'c_opt': 'Option Sets sem uso',
@@ -1407,6 +1446,11 @@ STR = {
   'integ_b': '{m} of {n} reusable definitions appear in the editor index without their content in the export ({h} hollow). Everything inside them — navigation, option sets, styles, plugin elements, scheduled workflows — is invisible to this analysis, so findings in any section may be false positives. Re-export the app or download the export through the connected mode (unbubble:connect), which re-hydrates the definitions, and run the audit again.',
   'integ_sample': 'Examples',
   'prov_label': 'export downloaded through the connected mode', 'prov_version': 'version',
+  'ev_t': 'Runtime evidence (server logs)',
+  'ev_b': 'logs of <span class="mono">{ver}</span>, {d} days up to {end}: <strong>{seen}</strong> candidate(s) seen, {none} not seen, {unk} without evidence. Every evaluated item carries a “logs:” badge. “Not seen” covers only this window and the plan\'s log retention: it strengthens “unused”, it does not prove it.',
+  'ev_seen': 'logs: {n}×', 'ev_seen_t': 'Seen {n}× in the {ver} logs over {d} days (last {last}): likely in real use — review before deleting.',
+  'ev_none': 'logs: 0', 'ev_none_t': 'Not seen in the {ver} logs over {d} days (this window and the plan\'s retention only).',
+  'ev_unk': 'logs: ?', 'ev_unk_t': 'No evidence: the query failed, was partial or went over the candidate cap.',
   'how_body': 'Each item has a confidence level. In Bubble, “unreferenced” does not always mean “safe to delete”: pages have their own public URL (openable via direct link, email or iframe/embed) and plugins can run server-side with no visible element. Backend workflows, option sets, reusables and styles have deterministic signals and high confidence.',
   'c_pages': 'Pages with no internal navigation', 'c_reuse': 'Unused reusables',
   'c_back': 'Unreachable backend workflows', 'c_opt': 'Unused Option Sets',
@@ -1551,7 +1595,7 @@ def esc(s):
 def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend, exposed,
                 opt, sty, plug_orphan, plug_cfg, plug_used, plug_total, dt,
                 plug_used_list=None, variables=None, wfaudit=None, apicalls=None, ghosts=None,
-                initial_deleted=None, mobile=None, integrity=None, provenance=None):
+                initial_deleted=None, mobile=None, integrity=None, provenance=None, evidence=None):
     T = STR[lang]
     initial_deleted = sorted(initial_deleted or [])
     integ = integrity or {}
@@ -1564,6 +1608,32 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
                                              n=integ['indexed_definitions'], h=integ['hollow_payload'])
                        + (f"<br><span class='dim'>{T['integ_sample']}: <span class='mono'>{ex}</span></span>" if ex else '')
                        + "</div>")
+    ev = evidence or {}
+    ev_keys = ev.get('by_key') or {}
+    ev_win = ev.get('window') or {}
+    ev_ver, ev_days = esc(ev.get('app_version') or 'live'), esc(ev_win.get('days') or '?')
+    ev_block = ''
+    if ev:
+        cnt = ev.get('counts') or {}
+        ev_block = (f"<div class='note note-amber'><strong>{T['ev_t']}.</strong> "
+                    + T['ev_b'].format(ver=ev_ver, d=ev_days, end=esc(str(ev_win.get('end') or '?')[:10]),
+                                       seen=cnt.get('seen', 0), none=cnt.get('not_seen', 0),
+                                       unk=cnt.get('unknown', 0))
+                    + "</div>")
+
+    def ev_tag(key):
+        row = ev_keys.get(key)
+        if not row:
+            return ''
+        hits = row.get('hits')
+        if hits:
+            cls, txt = 'v-orange', T['ev_seen'].format(n=hits)
+            tip = T['ev_seen_t'].format(n=hits, ver=ev_ver, d=ev_days, last=esc(str(row.get('last_seen') or '?')[:16]))
+        elif hits == 0:
+            cls, txt, tip = 'v-green', T['ev_none'], T['ev_none_t'].format(ver=ev_ver, d=ev_days)
+        else:
+            cls, txt, tip = 'v-gray', T['ev_unk'], T['ev_unk_t']
+        return f"<span class='vbadge evtag {cls}' title=\"{esc(tip)}\">{txt}</span>"
     prov = provenance or {}
     prov_sub = ''
     if prov:
@@ -1599,7 +1669,7 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
     # a checkbox <td> keyed by a stable "<category>:<id>" so marks survive report regeneration
     def chk(key, label):
         return (f"<td class='cellchk'><input type='checkbox' class='delchk' "
-                f'data-key="{esc(key)}" data-label="{esc(label)}"></td>')
+                f'data-key="{esc(key)}" data-label="{esc(label)}">{ev_tag(key)}</td>')
     del_h = f"<th class='cellchk'>{T['th_del']}</th>"
 
     # section sign-off: "this section is audited" even when some items are deliberately kept
@@ -1690,7 +1760,7 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
     back_wh_block = ((
         f"<h3>{T['back_wh_t']} ({len(back_wh)})</h3><p class=\"dim\">{T['back_wh_b']}</p>"
         + simple(back_wh, [T['th_wf'], T['th_folder'], T['wh_exposed'], T['th_id']],
-                 lambda r: [f"<span class='mono'>{esc(r['wf_name'])}</span>", esc(r['folder']),
+                 lambda r: [f"<span class='mono'>{esc(r['wf_name'])}</span>{ev_tag(TK['workflow'](r))}", esc(r['folder']),
                             ((f"<span class='vbadge v-green'>{T['wh_yes']}</span>" if r['expose']
                               else f"<span class='vbadge v-red'>{T['wh_no']}</span>")
                              + (f" <span class='tag'>{T['wh_payload']}</span>"
@@ -1902,7 +1972,7 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
     refurl_block = ''
     if ref_url_pages:
         body = ''.join(
-            f"<tr><td class='mono'>{esc(p['name'])}</td><td class='dim'>{esc(p['name_url_hits'])}</td>"
+            f"<tr><td class='mono'>{esc(p['name'])}{ev_tag(TK['page'](p))}</td><td class='dim'>{esc(p['name_url_hits'])}</td>"
             f"<td class='mono dim' style='font-size:11.5px'>…{esc(p['name_url_snippet'])}…</td></tr>"
             for p in ref_url_pages)
         refurl_block = (f"<div class='note note-green'><strong>{len(ref_url_pages)} · {T['refurl_t']}.</strong> {T['refurl_b']}</div>"
@@ -1950,7 +2020,7 @@ th,td{{text-align:left;padding:7px 11px;border-bottom:1px solid var(--line);vert
 code{{background:var(--graybg);padding:1px 5px;border-radius:4px;font-size:12.5px}}footer{{margin-top:50px;padding-top:18px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}}
 td a{{color:var(--accent);text-decoration:none}}td a:hover{{text-decoration:underline}}
 .swatch{{display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid var(--line);vertical-align:-2px}}h4{{color:var(--ink)}}
-.cellchk{{text-align:center;width:1%;white-space:nowrap}}.delchk{{width:16px;height:16px;cursor:pointer;accent-color:var(--accent)}}
+.cellchk{{text-align:center;width:1%;white-space:nowrap}}.evtag{{display:table;margin-top:3px;font-size:10.5px;padding:0 7px}}.cellchk .evtag{{margin-left:auto;margin-right:auto}}.delchk{{width:16px;height:16px;cursor:pointer;accent-color:var(--accent)}}
 tr.done td:not(.cellchk){{opacity:.4;text-decoration:line-through}}
 h2.sec{{display:flex;align-items:center;flex-wrap:wrap;gap:10px}}
 .secdone{{font-size:12.5px;font-weight:500;color:var(--dim);cursor:pointer;display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:20px;padding:3px 10px;background:var(--card);white-space:nowrap}}
@@ -1981,7 +2051,7 @@ tr.kept td:not(.cellchk){{font-style:italic;color:var(--dim)}}.kepttag{{display:
 <button onclick="clearProgress()">{T['trk_clear']}</button>
 </div>
 </div>
-<div class="note note-blue"><strong>{T['how_title']}.</strong> {T['how_body']}</div>{integ_block}
+<div class="note note-blue"><strong>{T['how_title']}.</strong> {T['how_body']}</div>{integ_block}{ev_block}
 <div class="cards">
 <div class="card k-orange"><div class="big">{len(unused_pages)}</div><div class="lab">{T['c_pages']}</div><div class="of">{T['of']} {total_pages}</div></div>
 {('<div class="card k-orange"><div class="big">' + str(len(mob['unused'])) + '</div><div class="lab">' + T['c_mob'] + '</div><div class="of">' + T['of'] + ' ' + str(mob['total']) + ' · ' + T['mob_card_of'] + (' · ' + str(len(mob['broken'])) + ' nav ✗' if mob['broken'] else '') + '</div></div>') if mob['total'] else ''}
@@ -2130,6 +2200,9 @@ def main():
     ap.add_argument('--state', action='append',
                     help='progress file to pre-mark already-deleted items: a .md/.json exported from the report, '
                          'or the connected-mode cleanup journal (repeatable; keys are merged)')
+    ap.add_argument('--evidence', action='append',
+                    help='runtime-evidence JSON from the connected mode (unbubble:connect runtime_evidence.py): '
+                         'log badges on the candidates it evaluated (repeatable)')
     ap.add_argument('--plugin-names', help='optional JSON {pluginId: name} to override/extend the bundled marketplace name registry')
     ap.add_argument('--plugin-pricing', help='optional JSON {pluginId: {status,model,price}} to override/extend the bundled pricing registry')
     args = ap.parse_args()
@@ -2160,6 +2233,7 @@ def main():
     mobile = analyze_mobile_views(data)
     integrity = analyze_export_integrity(data)
     provenance = load_provenance(args.input)
+    evidence = load_evidence(args.evidence, app_name) if args.evidence else None
 
     page_audit = {}
     if args.pages_csv:
@@ -2174,7 +2248,7 @@ def main():
                            backend, exposed, opt, sty, plug_orphan, plug_cfg, len(plug_used_list), plug_total,
                            dt, plug_used_list=plug_used_list, variables=variables, wfaudit=wfaudit,
                            apicalls=apicalls, ghosts=ghosts, initial_deleted=initial_deleted, mobile=mobile,
-                           integrity=integrity, provenance=provenance)
+                           integrity=integrity, provenance=provenance, evidence=evidence)
     out = args.out or (os.path.splitext(args.input)[0] + '_unused_report.html')
     with open(out, 'w', encoding='utf-8') as f:
         f.write(html_str)
@@ -2240,6 +2314,9 @@ def main():
         'removed_plugin_refs': {'total': len(ghosts['refs']), 'plugin_count': ghosts['plugin_count'],
                                 'plugins': ghosts['plugins'], 'refs': keyed(ghosts['refs'], 'ghostref')},
     }
+    if evidence:
+        # per tracker key: how often the candidate shows up in the server logs (counts only)
+        summary['runtime_evidence'] = evidence
     if args.json:
         with open(args.json, 'w', encoding='utf-8') as f:
             json.dump(summary, f, indent=1, ensure_ascii=False)
@@ -2253,6 +2330,10 @@ def main():
     if provenance:
         print('  Provenance      : downloaded via connected mode · version %s · %s'
               % (provenance.get('app_version') or provenance.get('version') or '?', provenance.get('fetched_at') or '?'))
+    if evidence:
+        print('  Runtime evidence: %d seen in the %s logs (review before deleting), %d not seen, %d unknown - %s days'
+              % (evidence['counts']['seen'], evidence.get('app_version') or 'live', evidence['counts']['not_seen'],
+                 evidence['counts']['unknown'], (evidence.get('window') or {}).get('days') or '?'))
     print('  Pages           : %d / %d no id-navigation; of those %d linked by URL/name (kept) -> %d deletable candidates'
           % (len(up) + len(ref_url), len(pages), len(ref_url), len(up)))
     if mobile['total']:
