@@ -2,6 +2,7 @@ import 'server-only';
 import fs from 'node:fs';
 import path from 'node:path';
 import { readJson, readText, statInfo } from '../fsx';
+import { readJournal } from './journal';
 import type { AuditCategory, AuditProgress, AuditRound, AuditStage, Confidence, KeptItem, StageOverride } from '../types';
 
 /** Anything the audit JSON stores per category: a list of findings or a bare number. */
@@ -190,6 +191,13 @@ export function scanAudit(projectDir: string, override?: StageOverride): AuditSt
     if (!progressFile || rel.endsWith('.json') || parsed.sectionsDone.length > progressFile.sectionsDone.length) progressFile = parsed;
   }
 
+  // Deletions applied through the connected mode are deleted, not kept — even when the progress
+  // file was written before the journal (the report rewrites it on its next save).
+  const journal = readJournal(projectDir);
+  if (progressFile && journal.appliedKeys.size) {
+    progressFile = { ...progressFile, kept: progressFile.kept.filter((k) => !journal.appliedKeys.has(k.key)) };
+  }
+
   const rounds = new Map<string, AuditRound>();
   for (const name of names) {
     const m = name.match(ROUND_RE);
@@ -271,6 +279,7 @@ export function scanAudit(projectDir: string, override?: StageOverride): AuditSt
     rounds: list,
     latest,
     progressFile,
+    journal: journal.summary,
     sectionsTotal: REPORT_SECTIONS.length,
     sectionsResolved: resolvedSections.size,
     sectionsWithFindings: withFindings.size,

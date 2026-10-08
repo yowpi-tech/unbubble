@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { NextResponse } from 'next/server';
 import { readJson } from '@/lib/fsx';
+import { readJournal } from '@/lib/scan/journal';
 import { projectDirFor } from '@/lib/scan/project';
 
 export const dynamic = 'force-dynamic';
@@ -13,6 +14,12 @@ export const dynamic = 'force-dynamic';
  *
  * GET  → { exists: false } when no file yet, else the stored payload + exists: true
  * PUT  → validates the v2 payload and writes it (pretty JSON)
+ *
+ * Deletions applied through the connected mode live in their own journal
+ * (audit/cleanup-applied__<app>.json). GET merges the entries that count — applied to test, or on
+ * a merged branch — into `deleted`, so the report ticks them; PUT drops those keys again before
+ * writing, because the report sends back everything that is ticked: the progress file keeps only
+ * what the owner marked by hand, the journal keeps what the MCP applied.
  */
 
 const MAX_ITEMS = 50_000;
@@ -32,8 +39,11 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   if (!dir) return NextResponse.json({ error: 'not found' }, { status: 404 });
   const file = progressPath(dir, id);
   const json = readJson<Record<string, unknown>>(file);
-  if (!json) return NextResponse.json({ app: id, exists: false, deleted: [], sections_done: [], kept: [] });
-  return NextResponse.json({ ...json, exists: true });
+  const applied = Array.from(readJournal(dir).appliedKeys).sort();
+  if (!json && !applied.length) return NextResponse.json({ app: id, exists: false, deleted: [], sections_done: [], kept: [] });
+  const stored = json ?? { app: id, version: 2, deleted: [], sections_done: [], kept: [] };
+  const own = (strings(stored.deleted) ?? []).filter((k) => !applied.includes(k));
+  return NextResponse.json({ ...stored, deleted: Array.from(new Set([...own, ...applied])).sort(), applied_via_connect: applied, exists: true });
 }
 
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -61,11 +71,12 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     .filter((k) => k.key);
   const sections = body.sections && typeof body.sections === 'object' && !Array.isArray(body.sections) ? (body.sections as Record<string, unknown>) : {};
 
+  const applied = readJournal(dir).appliedKeys;
   const payload = {
     app: id,
     version: 2,
     updated: new Date().toISOString().slice(0, 10),
-    deleted: Array.from(new Set(deleted)).sort(),
+    deleted: Array.from(new Set(deleted.filter((k) => !applied.has(k)))).sort(),
     sections_done: Array.from(new Set(sectionsDone)).sort(),
     sections,
     kept,

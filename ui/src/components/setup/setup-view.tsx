@@ -1,15 +1,15 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { AlertTriangle, CheckCircle2, CircleDashed, CircleOff, FolderOpen, GitBranch, RefreshCw } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, CircleDashed, CircleOff, FolderOpen, GitBranch, PlugZap, RefreshCw, XCircle } from 'lucide-react';
 import { Breadcrumbs } from '@/components/breadcrumbs';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { CommandBlock } from '@/components/copy-button';
-import { useLocale } from '@/components/locale-provider';
+import { formatDate, useLocale } from '@/components/locale-provider';
 import { cn } from '@/lib/utils';
-import type { HostInstall, HostKey, SetupInfo } from '@/lib/types';
+import type { ConnectedModeInfo, HostInstall, HostKey, SetupInfo } from '@/lib/types';
 import type { TKey } from '@/lib/i18n';
 
 const HOST_SKILL_ROOT: Record<HostKey, string> = {
@@ -23,11 +23,22 @@ const HOST_SKILL_ROOT: Record<HostKey, string> = {
   windsurf: '~/.codeium/windsurf/skills',
 };
 
+/** A path for a shell command: `~` is not expanded inside quotes, `$HOME` is. */
+function shellPath(p: string): string {
+  return `"${p.replace(/^~(?=\/|$)/, '$HOME')}"`;
+}
+
 function installCommand(host: HostKey, repo: string): string {
-  const q = `"${repo}"`;
+  const q = shellPath(repo);
   if (host === 'claude') return `mkdir -p ~/.claude/skills && ln -sfn ${q} ~/.claude/skills/unbubble`;
   const root = HOST_SKILL_ROOT[host];
   return `mkdir -p ${root} && for s in audit clone level-up; do ln -sfn ${q}/skills/$s ${root}/unbubble-$s; done`;
+}
+
+/** The optional unbubble:connect skill on hosts that link one folder per skill. */
+function connectSkillCommand(host: HostKey, repo: string): string | null {
+  if (host === 'claude') return null; // the plugin folder already carries every skill
+  return `ln -sfn ${shellPath(repo)}/skills/connect ${HOST_SKILL_ROOT[host]}/unbubble-connect`;
 }
 
 function StatusIcon({ status }: { status: HostInstall['status'] }) {
@@ -37,7 +48,7 @@ function StatusIcon({ status }: { status: HostInstall['status'] }) {
   return <AlertTriangle className="size-4 text-zinc-400" />;
 }
 
-export function SetupView({ info }: { info: SetupInfo }) {
+export function SetupView({ info, connected }: { info: SetupInfo; connected: ConnectedModeInfo }) {
   const { t } = useLocale();
   const router = useRouter();
   const present = info.hosts.filter((h) => h.detectedOnMachine);
@@ -117,6 +128,8 @@ export function SetupView({ info }: { info: SetupInfo }) {
         )}
       </section>
 
+      <ConnectedCard connected={connected} repo={info.repoDir} />
+
       <section className="space-y-4">
         <h2 className="text-lg font-semibold">{t('setup.onboarding')}</h2>
         <ol className="space-y-4">
@@ -154,6 +167,7 @@ export function SetupView({ info }: { info: SetupInfo }) {
 function HostCard({ host, repo }: { host: HostInstall; repo: string }) {
   const { t } = useLocale();
   const note: TKey = host.host === 'claude' ? 'setup.claude.note' : host.host === 'codex' ? 'setup.codex.note' : host.host === 'agents' ? 'setup.agents.note' : 'setup.generic.note';
+  const optional = connectSkillCommand(host.host, repo);
   return (
     <Card className={cn(host.status === 'host_absent' && 'opacity-70')}>
       <CardHeader className="pb-2">
@@ -196,6 +210,17 @@ function HostCard({ host, repo }: { host: HostInstall; repo: string }) {
                       </span>
                     );
                   })}
+                  <span
+                    title={t('setup.connect.optional')}
+                    className={cn(
+                      'rounded-full px-1.5 py-0.5 font-mono border border-dashed',
+                      loc.skills.some((x) => x.skill === 'connect')
+                        ? 'border-green-300 text-green-800 dark:border-green-800 dark:text-green-300'
+                        : 'border-zinc-300 text-zinc-400 dark:border-zinc-700 dark:text-zinc-500',
+                    )}
+                  >
+                    connect
+                  </span>
                   <span className={cn('ml-auto', loc.inSync === true ? 'text-green-700 dark:text-green-400' : loc.inSync === false ? 'text-amber-700 dark:text-amber-400' : 'text-zinc-400')}>
                     {loc.inSync === true ? t('setup.inSync') : loc.inSync === false ? t('setup.outOfSync') : t('setup.unknownSync')}
                   </span>
@@ -208,16 +233,163 @@ function HostCard({ host, repo }: { host: HostInstall; repo: string }) {
           <p className="text-xs font-semibold text-zinc-600 dark:text-zinc-300 mb-1">{t('setup.howTo')}</p>
           <CommandBlock text={installCommand(host.host, repo)} />
           <p className="text-xs text-zinc-500 mt-1">{t(note)}</p>
+          {optional && (
+            <div className="mt-2">
+              <p className="text-xs text-zinc-500 mb-1">{t('setup.connect.skillCmd')}</p>
+              <CommandBlock text={optional} />
+            </div>
+          )}
           {host.host === 'claude' && (
             <div className="mt-2">
               <p className="text-xs text-zinc-500 mb-1">
                 {t('setup.alt')}: {t('setup.altClaude')}
               </p>
-              <CommandBlock text={`claude --plugin-dir "${repo}"`} />
+              <CommandBlock text={`claude --plugin-dir ${shellPath(repo)}`} />
             </div>
           )}
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+const HOST_NAMES: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', cursor: 'Cursor' };
+
+function ConnectedCard({ connected: c, repo }: { connected: ConnectedModeInfo; repo: string }) {
+  const { t, locale } = useLocale();
+  const launcher = `python3 ${shellPath(repo)}/mcp/launch.py`;
+  const status: { key: TKey; cls: string } = !c.available
+    ? { key: 'setup.connect.status.unavailable', cls: 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400' }
+    : c.installed
+      ? { key: 'setup.connect.status.ready', cls: 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300' }
+      : c.checks.length
+        ? { key: 'setup.connect.status.incomplete', cls: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300' }
+        : { key: 'setup.connect.status.notInstalled', cls: 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300' };
+  const registered = Object.entries(c.hosts);
+  const exportApps = Object.entries(c.exports);
+
+  return (
+    <section className="space-y-3">
+      <div>
+        <h2 className="text-lg font-semibold flex items-center gap-2">
+          <PlugZap className="size-5 text-zinc-400" />
+          {t('setup.connect.title')}
+          <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', status.cls)}>{t(status.key)}</span>
+        </h2>
+        <p className="text-sm text-zinc-500">{t('setup.connect.hint')}</p>
+      </div>
+      {c.available && (
+        <Card>
+          <CardContent className="pt-6 space-y-5">
+            {c.error && <p className="text-sm text-red-600">{t('setup.connect.error')}: <span className="font-mono text-xs">{c.error}</span></p>}
+            <div className="grid gap-5 lg:grid-cols-2">
+              <div className="space-y-2 min-w-0">
+                <p className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">{t('setup.connect.checks')}</p>
+                {c.vendored && (
+                  <p className="text-xs text-zinc-500">
+                    befree-bubble-mcp <span className="font-mono">{c.vendored.commit.slice(0, 12)}</span> · {c.vendored.ref} · {c.vendored.files} {t('common.files')}
+                  </p>
+                )}
+                <ul className="space-y-1">
+                  {c.checks.map((check) => (
+                    <li key={check.name} className="flex items-start gap-2 text-xs min-w-0">
+                      {check.ok ? <CheckCircle2 className="size-3.5 shrink-0 mt-0.5 text-green-600 dark:text-green-400" /> : <XCircle className="size-3.5 shrink-0 mt-0.5 text-red-500" />}
+                      <span className="shrink-0">{check.name}</span>
+                      <span className="font-mono text-zinc-400 truncate" title={check.detail}>
+                        {check.detail}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-xs text-zinc-500 flex flex-wrap items-center gap-1.5 pt-1">
+                  {t('setup.connect.registered')}:
+                  {registered.map(([host, on]) => (
+                    <span
+                      key={host}
+                      className={cn(
+                        'rounded-full px-1.5 py-0.5',
+                        on ? 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300' : 'bg-zinc-100 text-zinc-400 line-through dark:bg-zinc-800 dark:text-zinc-500',
+                      )}
+                    >
+                      {HOST_NAMES[host] ?? host}
+                    </span>
+                  ))}
+                </p>
+                <p className="text-xs text-zinc-400">
+                  {t('setup.connect.home')}: <span className="font-mono">{c.home}</span>
+                </p>
+              </div>
+              <div className="space-y-2 min-w-0">
+                <p className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">{t('setup.connect.profiles')}</p>
+                {c.profiles.length === 0 ? (
+                  <p className="text-xs text-zinc-500">{t('setup.connect.noProfiles')}</p>
+                ) : (
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-zinc-500">
+                        <th className="py-1 pr-2 font-medium">{t('setup.connect.profile')}</th>
+                        <th className="py-1 pr-2 font-medium">{t('setup.connect.version')}</th>
+                        <th className="py-1 pr-2 font-medium">{t('setup.connect.session')}</th>
+                        <th className="py-1 font-medium">{t('setup.connect.roles')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {c.profiles.map((p) => (
+                        <tr key={p.name} className="border-t border-zinc-100 dark:border-zinc-800 align-top">
+                          <td className="py-1.5 pr-2">
+                            <span className="font-mono break-all">{p.name}</span>
+                            {p.appId && p.appId !== p.name && <span className="block text-zinc-400 font-mono">{p.appId}</span>}
+                          </td>
+                          <td className="py-1.5 pr-2 font-mono">{p.appVersion ?? 'test'}</td>
+                          <td className="py-1.5 pr-2">
+                            {p.sessionCaptured ? (
+                              <span className="text-green-700 dark:text-green-400">
+                                ✓ {p.sessionUpdated ? formatDate(p.sessionUpdated, locale, true) : ''}
+                                {p.sessionProfile && <span className="block text-zinc-400">{t('setup.connect.sessionOf', { profile: p.sessionProfile })}</span>}
+                              </span>
+                            ) : (
+                              <span className="text-zinc-400">{t('setup.connect.noSession')}</span>
+                            )}
+                          </td>
+                          <td className="py-1.5 font-mono text-zinc-500">
+                            {[...p.appSessions, ...p.rebuildSessions.map((r) => `rebuild:${r}`)].join(', ') || '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                {exportApps.length > 0 && (
+                  <div className="pt-2">
+                    <p className="text-xs font-semibold text-zinc-600 dark:text-zinc-300 mb-1">{t('setup.connect.exports')}</p>
+                    <ul className="space-y-0.5 text-xs text-zinc-500">
+                      {exportApps.map(([app, e]) => (
+                        <li key={app}>
+                          <span className="font-mono">{app}</span> · {e.count} · {t('setup.connect.latest')} {e.latest.appVersion ?? '?'}
+                          {e.latest.fetchedAt ? ` · ${formatDate(e.latest.fetchedAt, locale, true)}` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <p className="text-xs text-zinc-400 pt-1">{t('setup.connect.privacy')}</p>
+              </div>
+            </div>
+            <div className="grid gap-3 lg:grid-cols-2 border-t pt-4">
+              <div className="space-y-1">
+                <p className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">{c.installed ? t('setup.connect.cmd.check') : t('setup.connect.cmd.install')}</p>
+                <CommandBlock text={c.installed ? `${launcher} doctor` : `python3 ${shellPath(repo)}/mcp/install.py`} />
+                {!c.installed && <p className="text-xs text-zinc-500">{t('setup.connect.cmd.installNote')}</p>}
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">{t('setup.connect.cmd.login')}</p>
+                <CommandBlock text={`${launcher} cli profile add <app-id> --app-id <app-id> --app-version test\n${launcher} cli session login --profile <app-id> --app-id <app-id>`} />
+                <p className="text-xs text-zinc-500">{t('setup.connect.cmd.loginNote')}</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </section>
   );
 }

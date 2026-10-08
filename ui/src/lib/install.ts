@@ -7,7 +7,11 @@ import { isRepoDir, prettyPath, repoDir, repoVersion, projectsDir } from './path
 import { listProjectIds } from './scan/project';
 import type { HostInstall, HostKey, InstallLocation, SetupInfo, SkillPresence } from './types';
 
+/** The core pipeline — "installed" means these three. */
 const SKILLS: SkillPresence['skill'][] = ['audit', 'clone', 'level-up'];
+/** Optional skills, reported when present (unbubble:connect needs the mcp/ install as well). */
+const OPTIONAL_SKILLS: SkillPresence['skill'][] = ['connect'];
+const ALL_SKILLS = [...SKILLS, ...OPTIONAL_SKILLS];
 
 /**
  * Where each host looks for skills. Roots are relative to $HOME unless absolute.
@@ -59,10 +63,10 @@ function isUnbubbleSkillMd(p: string): boolean {
   }
 }
 
-/** Which of the three skills a folder provides, either nested (`skills/<s>/SKILL.md`) or directly (`SKILL.md`). */
+/** Which UnBubble skills a folder provides, either nested (`skills/<s>/SKILL.md`) or directly (`SKILL.md`). */
 function skillsIn(dir: string, repo: string): SkillPresence[] {
   const found: SkillPresence[] = [];
-  for (const s of SKILLS) {
+  for (const s of ALL_SKILLS) {
     const candidates = [path.join(dir, 'skills', s, 'SKILL.md'), path.basename(dir).endsWith(s) || path.basename(dir).includes(s) ? path.join(dir, 'SKILL.md') : ''].filter(Boolean);
     for (const c of candidates) {
       if (!fs.existsSync(c)) continue;
@@ -80,7 +84,7 @@ function skillsIn(dir: string, repo: string): SkillPresence[] {
     if (fs.existsSync(direct) && isUnbubbleSkillMd(direct)) {
       const m = fs.readFileSync(direct, 'utf8').match(/^name:\s*([\w-]+)/m);
       const s = m?.[1] as SkillPresence['skill'] | undefined;
-      if (s && SKILLS.includes(s)) {
+      if (s && ALL_SKILLS.includes(s)) {
         const a = sha(direct);
         const b = sha(path.join(repo, 'skills', s, 'SKILL.md'));
         found.push({ skill: s, path: direct, inSync: a && b ? a === b : null });
