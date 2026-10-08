@@ -9,8 +9,9 @@ Reads the audit --json summary (summary_version 2: every finding carries its tra
 writes batches of MCP tool calls, in dependency order — page workflows and custom events, pages,
 option sets, styles, color/font variables, data fields, data types (soft delete) — each item with
 the exact tool arguments (execute=false: the agent previews, the owner approves the batch, only
-then execute=true + confirm=true). Items the owner kept, items already deleted, and items already
-applied on this target are left out. What the MCP cannot delete (reusable definitions, backend
+then execute=true + confirm=true). Items the owner kept, items already deleted, items already
+applied on this target, and items the audit's runtime evidence saw in the server logs
+(bubble_audit.py --evidence) are left out. What the MCP cannot delete (reusable definitions, backend
 workflows, plugins, API Connector calls, removed-plugin references, mobile views, ambiguous names)
 goes to a `manual` list with where to find it in the editor.
 
@@ -91,19 +92,27 @@ def build_plan(audit, *, profile, app_version, deleted, kept, applied, include_r
                          'get a complete export and audit again before cleaning anything')
     base = {'profile': profile, 'app_version': app_version, 'execute': False}
     batches = {name: [] for name, _ in ORDER}
-    manual, skipped = [], Counter()
+    manual, skipped, alive = [], Counter(), []
+    evidence = (audit.get('runtime_evidence') or {}).get('by_key') or {}
 
-    def admit(key):
+    def admit(item):
+        key = item['key']
         if key in kept:
             skipped['kept by the owner'] += 1
             return False
         if key in deleted or key in applied:
             skipped['already deleted or applied'] += 1
             return False
+        hits = (evidence.get(key) or {}).get('hits')
+        if hits:  # the server logs show it running: not a deletion candidate, whatever the export says
+            skipped['seen in the server logs (runtime evidence)'] += 1
+            alive.append({'key': key, 'label': item.get('label') or key, 'hits': hits,
+                          'last_seen': (evidence.get(key) or {}).get('last_seen')})
+            return False
         return True
 
     def add(batch, item, tool, args):
-        if admit(item['key']):
+        if admit(item):
             preview = dict(base, **args)
             batches[batch].append({'key': item['key'], 'label': item.get('label') or item['key'], 'tool': tool,
                                    'args': preview,
@@ -111,7 +120,7 @@ def build_plan(audit, *, profile, app_version, deleted, kept, applied, include_r
                                    'apply_args': dict(preview, execute=True, dry_run=False)})
 
     def man(item, where):
-        if admit(item['key']):
+        if admit(item):
             manual.append({'key': item['key'], 'label': item.get('label') or item['key'], 'where': where})
 
     wfa = audit.get('workflow_audit') or {}
@@ -214,6 +223,7 @@ def build_plan(audit, *, profile, app_version, deleted, kept, applied, include_r
         'options': {'include_review': include_review, 'include_destructive': include_destructive},
         'batches': ordered,
         'manual': manual,
+        'seen_at_runtime': alive,
         'skipped': dict(skipped),
         'counts': {'tool_calls': sum(len(b['items']) for b in ordered), 'manual': len(manual)},
     }
@@ -233,6 +243,12 @@ def to_markdown(plan):
     if plan['manual']:
         lines += ['## By hand in the Bubble editor (%d)' % len(plan['manual']), '']
         lines += ['- `%s` — %s: %s' % (item['key'], item['label'], item['where']) for item in plan['manual']]
+        lines.append('')
+    if plan.get('seen_at_runtime'):
+        lines += ['## Seen in the server logs — not planned (%d)' % len(plan['seen_at_runtime']), '',
+                  'The export shows no use, but the runtime evidence does: ask the owner who calls these.', '']
+        lines += ['- `%s` — %s: %d× (last %s)' % (item['key'], item['label'], item['hits'], item.get('last_seen') or '?')
+                  for item in plan['seen_at_runtime']]
         lines.append('')
     if plan['skipped']:
         lines += ['## Left out', ''] + ['- %s: %d' % (why, n) for why, n in plan['skipped'].items()] + ['']

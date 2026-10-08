@@ -102,6 +102,16 @@ data-type deletion.
 | What each screen shows, per role; parity of the rebuild | `scripts/capture_screens.py`, `scripts/screen_parity.py` | `references/screens.md` |
 | Bubble side of the cutover (Data API, redirects, drain) | `set_data_type_api_exposure`, `create_301_redirect`, logs | `references/cutover.md` |
 
+### In the pipeline
+
+| Step | Connected mode adds |
+|---|---|
+| `unbubble:audit` 1 | a fresh export of `test` with provenance (`fetch_export.py`) |
+| `unbubble:audit` 3b | runtime evidence → `bubble_audit.py --evidence` puts a **logs: N×** badge on each candidate it checked |
+| `unbubble:audit` 6 | the cleanup applied on a branch, batch by batch (`references/cleanup.md`), then round N+1 |
+| `unbubble:clone` 1 · 3b · 06 | the lean export after the merge; log evidence for "external consumers?" / "is the flagged integration live?"; what each role sees per page |
+| `unbubble:level-up` 2b · 4 · 6b | content inventory per screen and role; sizing (storage, WU, plan) and the Bubble side of the cutover; the minimum screen-parity gate |
+
 **Long operations go through the scripts, not MCP tool calls.** Export downloads and paginated log
 pulls can outlast a host's tool timeout (Codex: 60 s) and would pour data into the conversation; the
 scripts run the allowlisted CLI (`mcp/launch.py cli …`), parse its JSON in-process and print only
