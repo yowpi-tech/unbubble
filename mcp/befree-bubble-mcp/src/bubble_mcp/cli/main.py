@@ -128,7 +128,9 @@ from bubble_mcp.validators.semantic import validate_plan
 
 
 def emit_json(payload: object) -> None:
-    print(json.dumps(payload, indent=2, sort_keys=True))
+    # UnBubble edition: the CLI runs inside agent shells, so its output gets the same redaction as
+    # MCP tool results (settings.secure, cookies, tokens) before it reaches a transcript.
+    print(json.dumps(redact_sensitive(payload), indent=2, sort_keys=True))
 
 
 def positive_int(value: str) -> int:

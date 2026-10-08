@@ -62,6 +62,14 @@ DENIED_TOOL_NAMES = frozenset(
         "sync_figma_style",
         "sync_figma_tokens",
         "upload_asset",
+        # Data API tokens: an admin token reads and writes the whole database with privacy rules
+        # bypassed, so the app owner creates, rotates and deletes them by hand (Settings > API)
+        "create_api_token",
+        "rename_api_token",
+        "regenerate_api_token",
+        "delete_api_token",
+        # irreversible (Optimize application's CleanApp); the recoverable delete_data_type stays
+        "delete_data_type_permanently",
     }
 )
 DENIED_TOOL_PREFIXES = (

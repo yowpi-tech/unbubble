@@ -114,7 +114,7 @@
   "src/bubble_mcp/catalog_quality.py": "40c9473f8dd7ac98691c1822b02e2bcf03057b0f474c996595eaf2d8e52c11c6",
   "src/bubble_mcp/catalog_schema_precision.py": "932db5adfc6818d35818a25cf5eae15594d59e826deea27404311466abde564f",
   "src/bubble_mcp/cli/__init__.py": "e4053e7c75fd9cac81765ba17c94ab5bd0c4354383c8f54086e6128e90c16c67",
-  "src/bubble_mcp/cli/main.py": "24cad784c493ce0c78c716f49a5a7815c0f812de1fbf7598cdaf6449b654370d",
+  "src/bubble_mcp/cli/main.py": "981b9ce69cf9a8bb0e1cbacc4847100d0ac948e376ccdf24fe95153b01182745",
   "src/bubble_mcp/cli_leaf_inventory.py": "eed6866b348d508dcd332a72dfcbda7566eb7b293b3ba4ea3e1ef9517498d38e",
   "src/bubble_mcp/compiler/__init__.py": "b7e30630017a6fc10657a180a3c1fe328f271f1b6463956eb2fd13f1f339ff85",
   "src/bubble_mcp/compiler/payload.py": "659e2fc0166bd46866618f9940bba664e2f0c9d2c18f8639c47332c98f1fd1a5",
@@ -212,7 +212,7 @@
   "src/bubble_mcp/server/catalog.py": "363857b22bb30f1eacd382a8ab38c67b2f7e72069c7c3447f72e731f08d845d8",
   "src/bubble_mcp/server/completion.py": "5ed9daf82a89068658856233330db453b7ecd342c22ca4b29fbf4e9b702a26fd",
   "src/bubble_mcp/server/instructions.py": "d0d8a92716459e3084b3c89b56436055660a298b8a5b2fda1fe3eaafd7355f28",
-  "src/bubble_mcp/server/policy.py": "9eefc2a03410159239cd61f07ec41cde794043d2c265f377da1a7988f16553d2",
+  "src/bubble_mcp/server/policy.py": "9a89167ed1bb5e22d50645160eb05916ff05d0b11aac69dd8716e3aad0dc6388",
   "src/bubble_mcp/server/policy_state.py": "cba2d0f5fde392faa36b466b91179e6f982604b45087b4c87a8553cc11f1c0e9",
   "src/bubble_mcp/server/prompts.py": "107ab1e719cf9aba86e09768e52f75f3d3f0059226eac299cdc57c704211e2b5",
   "src/bubble_mcp/server/resources.py": "577d84df6bceed9792f3f47e9f02373f48d5ee80c3d4b38f9b75bc76ceff7e15",
@@ -262,12 +262,12 @@
   "src/bubble_mcp/visual_defaults.py": "4894fd5332439cb3e9fdb7e02a7e32590008b20571081be2dd980c06d82c506b"
  },
  "source": {
-  "commit": "f02064b70d7d422bff223194fd3797d233da8af9",
-  "commit_date": "2026-10-07T23:00:53-03:00",
+  "commit": "7512555d29b270f868f53d30fda6b2c9d13c23bd",
+  "commit_date": "2026-10-08T11:37:29-03:00",
   "ref": "unbubble/hardening",
   "repository": "https://github.com/yowpi-tech/befree-bubble-mcp.git",
   "upstream": "https://github.com/pedrobefree/befree-bubble-mcp"
  },
- "synced_at": "2026-10-08T13:16:54+00:00",
- "total_bytes": 6755177
+ "synced_at": "2026-10-08T14:49:09+00:00",
+ "total_bytes": 6755830
 }
