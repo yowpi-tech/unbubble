@@ -82,6 +82,7 @@ skills/
                 references/assessment-checklist.md
 ui/             the local console (Next.js) — progress per project, embedded reports,
                 docs viewer, backlog tracking, install detection and onboarding
+mcp/            optional connected mode: vendored befree-bubble-mcp (MIT), installer, launcher
 .claude-plugin/ plugin manifest for Claude Code
 LICENSE · NOTICE
 ```
@@ -257,6 +258,10 @@ you made (Section 4 of the license). A suggested credit line for derivative work
 > Trettin, Apache License 2.0.
 
 Contributions are welcome and are accepted under the same license.
+
+The optional connected mode in `mcp/` vendors **befree-bubble-mcp** by Befree
+(https://github.com/pedrobefree/befree-bubble-mcp), MIT License — its license is kept in
+`mcp/befree-bubble-mcp/LICENSE` and credited in [`NOTICE`](NOTICE).
 
 ## Author
 

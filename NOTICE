@@ -10,3 +10,12 @@ the Apache License, Version 2.0 (see LICENSE). Derivative works must keep the or
 copyright notice and credit "UnBubble by Yowpi Tech and Marlon Trettin" in their own
 notices or documentation; they may add their own notices but must not remove or rename
 the original authors.
+
+--------------------------------------------------------------------------------
+Third-party software
+
+This product includes befree-bubble-mcp (https://github.com/pedrobefree/befree-bubble-mcp),
+Copyright (c) 2026 Befree, licensed under the MIT License (see mcp/befree-bubble-mcp/LICENSE).
+It is vendored in mcp/befree-bubble-mcp/ from the fork https://github.com/yowpi-tech/befree-bubble-mcp,
+commit f02064b70d7d422bff223194fd3797d233da8af9, with modifications made in that fork (the UnBubble edition hardening) and
+some components not shipped; mcp/VENDORED.md lists the commit and the excluded paths.

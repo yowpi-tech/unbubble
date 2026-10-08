@@ -1,0 +1,16 @@
+# Runtime dependencies of the vendored befree-bubble-mcp (pyproject `dependencies` + the `browser`
+# extra), pinned to the versions verified with this edition. Regenerate the lock with:
+#   uv pip compile mcp/requirements.in --universal --python-version 3.11 --generate-hashes -o mcp/requirements.lock
+beautifulsoup4==4.15.0
+chardet==5.2.0
+charset-normalizer==3.4.6
+requests==2.34.2
+playwright==1.61.0
+# transitive dependencies, pinned to the set the fork's test suite ran with
+certifi==2026.6.17
+greenlet==3.5.3
+idna==3.18
+pyee==13.0.1
+soupsieve==2.9
+typing-extensions==4.16.0
+urllib3==2.7.0
