@@ -15,6 +15,11 @@ UX). The Bubble→modern translation table and the migration decision matrix are
       `database.json`. A table exposed with `everyone: view_all=true` leaks to anyone with the
       URL. Bubble privacy rules are the ONLY server-side guard; page-level "hide if not admin"
       conditionals are client-side and worthless as security.
+- [ ] **Existing Data API tokens** — each one (`BUBBLE_API_TOKEN_*` in the clone's
+      `secrets/ENV-KEYS.md`) is an admin key: privacy rules do not limit it, it reads and writes
+      every exposed type and can run any public API workflow. Who holds each token, which
+      integration still needs it, which can be revoked now? None of them is reused for the
+      migration ETL.
 - [ ] **Role model** — how are roles stored? (Bubble typical: text field / option set on User,
       checked in page conditionals). Flag anything client-enforced. Note sentinel values shared
       across users (e.g. one shared ADMIN code for a whole team = no per-user accountability).
@@ -116,7 +121,7 @@ UX). The Bubble→modern translation table and the migration decision matrix are
 | Files/images | URLs in CSV — still must download assets | same; script the download+reupload |
 | Delta / dual-run | none (one-shot, needs freeze) | incremental sync → near-zero-downtime cutover |
 | Effort | low (small static tables) | one reusable ETL for all tables |
-| Auth | editor access only | Data API enabled + read-only token; privacy rules apply to the token's role |
+| Auth | editor access only | Data API enabled + the migrated types exposed + a dedicated token the owner creates by hand. An admin token ignores privacy rules and cannot be scoped to read-only or to some tables — per-type exposure is the only boundary; delete the token and revert the exposures after cutover |
 
 Default recommendation: **Data API sync for core/large/hot tables + CSV for small static
 lookups**; always keep `bubble_id`, migrate in FK-dependency order, validate with row counts +

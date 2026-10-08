@@ -45,6 +45,13 @@ python3 scripts/bubble_inventory.py "path/to/export.bubble" --outdir <workdir>/i
 python3 scripts/bubble_secrets.py   "path/to/export.bubble" --outdir <workdir>/secrets
 ```
 
+**Connected mode** (`unbubble:connect`, optional): once the owner has merged the cleanup into
+`test`, the lean export can come straight from the editor —
+`python3 <connect>/scripts/fetch_export.py --app <app-id> --version test` (`<connect>` =
+`skills/connect/` of the UnBubble checkout) — instead of a manual export. Either way, record the
+source in `00-overview.md`: for a downloaded export its provenance sidecar `<export>.meta.json`
+(version, `fetched_at`, `sha256`); for a manual one the file name and the date the owner exported it.
+
 Both are dependency-free (Python 3.8+). The inventory emits nine JSON files and prints a
 summary. Read `summary.json` first — it has counts and **security flags** (endpoints without
 auth, endpoints ignoring privacy rules) you must surface in the docs.
@@ -131,7 +138,8 @@ user is speaking.
 
 ```
 docs/
-  00-overview.md            what the system is, actors/roles, functional modules, key flows
+  00-overview.md            what the system is, actors/roles, functional modules, key flows;
+                            the source export (version, date, sha256 when downloaded)
   01-database.md            per table: purpose, fields table, relationships (mermaid erDiagram),
                             option sets used, privacy rules, Data-API exposure
   02-external-apis.md       per provider: what it's for, auth type, calls table (method, URL,
@@ -144,12 +152,23 @@ docs/
   05-backend-workflows.md   endpoints (external contract) vs internal jobs; per WF: trigger,
                             params, logic in plain language, schedule graph
   06-pages-and-reusables.md per module then per page: purpose, content type, key elements,
-                            workflows → business rules; reusables and where they're placed
+                            workflows → business rules; reusables and where they're placed;
+                            what each role sees, when screen captures exist (below)
   07-business-rules.md      cross-cutting rules extracted from all of the above, numbered
                             (BR-001 …) and written in VERIFIABLE form (see below)
   08-open-questions.md      ambiguities, suspected dead logic, smells noted for level-up,
                             anything requiring the owner's confirmation
 ```
+
+#### What each role sees (connected mode, optional)
+
+When the owner has captured the screens (`<connect>/references/screens.md`: test users per role on
+`version-test`, `capture_screens.py`), link each page's captures per role in
+`06-pages-and-reusables.md` (`visual/bubble/<role>/<page>.png`; `visual/INDEX-bubble.md` lists them,
+with "no access in this role" where a page redirects) and write down what each role sees and can
+do there: the information shown, the fields, the actions, the navigation. That is documentation of
+CONTENT and ACCESS — never describe colors, layout or spacing from the captures; the rebuild gets a
+new design system. Pages without a capture stay documented from the export alone.
 
 #### Business rules must be verifiable, not merely descriptive
 
@@ -189,6 +208,16 @@ is live — trace the flag, then ask the owner "is it on in production?"; a dorm
 remove whole integrations and endpoints from the parity contract), endpoints kept only for
 testing, external consumers not visible in the export (API tokens), and where any
 "encryption"/token logic actually runs.
+
+**Bring evidence to the question when connected mode is available.** Two of these have a runtime
+answer in the server logs of live, before asking: *does this exposed endpoint have external
+consumers?* (runs of the backend workflow behind it) and *is the integration behind this flag
+alive?* (runs of the workflow or the API Connector call on that path). Use
+`<connect>/scripts/runtime_evidence.py` for many candidates or `bubble_logs_fetch` with `contains:
+"<workflow or call name>"` for one, over 14–30 days, and put the counts and the last-seen date in
+the question ("the endpoint ran 1,284 times in 14 days, last today — keep it in the parity
+contract?"). Counts only, never log rows. Logs answer "it runs"; silence only covers the window
+and the plan's retention, so the owner still decides — record the evidence next to the decision.
 
 ### Plugin policy (encode it in 03-plugins.md)
 
@@ -273,7 +302,8 @@ The division of labor is strict:
 - Every behavioural BR-xxx is in verifiable form (`QUANDO … DEVE …` + `Aceite:`); purely
   descriptive ones are marked `[descritivo]`. The level-up gate checks this.
 - Anything you could not determine is in `08-open-questions.md` — no silent gaps.
-- Numbers in `00-overview.md` match `summary.json` exactly.
+- Numbers in `00-overview.md` match `summary.json` exactly, and it names the source export
+  (version and date; sha256 when it came through the connected mode).
 - `PARITY-MATRIX.md` has a script-generated row for EVERY inventory entity, each with exactly one
   disposition; its per-class row counts are printed next to the inventory counts and match.
 - Finish by telling the user the docs + PRD-clone + PARITY-MATRIX are the input for

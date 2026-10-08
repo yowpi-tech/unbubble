@@ -140,13 +140,26 @@ BEFORE any UI implementation starts. It must contain:
   the domain needs).
 - **Component inventory** (design-system pieces) and a **screen inventory** ranked by priority
   using `pages.json` element/workflow counts.
-- **Ready-to-paste prompts** for Claude Design: one for the system/tokens, then one per P0 screen.
+- **Content inventory per screen and role**, when the Bubble screens were captured
+  (`unbubble:connect` › `references/screens.md`; `visual/INDEX-bubble.md`): for each P0 screen and
+  each role, the information it shows, its fields, its actions, its navigation and its empty
+  states, citing the capture. Screens a role cannot open are listed as such.
+- **Ready-to-paste prompts** for Claude Design: one for the system/tokens, then one per P0 screen;
+  each screen prompt carries that screen's content inventory.
 - A handoff note: approved tokens → `tailwind.config` + CSS vars, components → shadcn/ui, feeding
   the design story in BACKLOG. The brief changes presentation only — never BR-xxx rules or the
   data model.
 
 Extract the palette/fonts with a small script over the `.bubble` (never hand-wave the tokens);
 put the color anchors and font names in the doc so Claude Design has real brand input.
+
+**The new design system rules the visuals — write this rule into the brief.** The captures are a
+*minimum-parity* reference for CONTENT and FLOW only: what each screen must show and let each role
+do. They are never a style reference — layout, typography, colors, spacing and component shapes of
+the Bubble app are not targets, and the rebuild is expected to look different and better. The
+tokens extracted from the export are brand input, not a ceiling. Prompts cite the captures for
+content and flow, never for appearance ("show the same fields and actions as the capture, in the
+design system's own layout").
 
 ### 3 · Redesign the data model
 
@@ -166,17 +179,40 @@ the checklist):
 - **Bubble Data API consumption** — the new system (or an ETL job) pages through
   `/api/1.1/obj/<type>` with a **Modified Date cursor**: preserves the Bubble `unique id` (keep
   it as `bubble_id` column for traceability + FK resolution), supports incremental delta sync,
-  enables **dual-run** and a low-downtime cutover. Requires enabling Data API + an API token —
-  the app's existing tokens are already preserved as `BUBBLE_API_TOKEN_*` in
-  `<workdir>/secrets/.env` (see `ENV-KEYS.md`); still prefer issuing a fresh token scoped
-  read-only and to the tables being migrated. Note privacy rules DO apply to API tokens'
-  visibility unless configured otherwise.
+  enables **dual-run** and a low-downtime cutover. Requires enabling the Data API, exposing the
+  migrated types, and an API token. Know what the token is: per Bubble's manual, a request with an
+  **admin API token acts with the builder's permissions — privacy rules do not limit it**, it can
+  read, change and delete every record of every exposed type, and Bubble tokens **cannot be
+  scoped** to read-only or to some tables. The only hard boundary is **per-type exposure** (a type
+  not exposed is unreachable for every caller). So: expose only the types being migrated, have the
+  owner create a **dedicated migration token by hand** (Settings → API) straight into the new
+  system's secret store, and delete it — and revert the exposures — after the cutover. The app's
+  existing tokens (preserved as `BUBBLE_API_TOKEN_*` in `<workdir>/secrets/.env`, see
+  `ENV-KEYS.md`) belong to existing integrations: do not reuse them for the ETL. Requests without a
+  token (or with a user token) only get what the privacy rules let that caller see — check what
+  "everyone" may read on every type you expose.
 
 Also cover: file/S3 asset migration (Bubble-hosted files must be downloaded and re-uploaded),
 option-set values → enum seed data, ordering of tables by FK dependency, **validation &
 reconciliation** (row counts + checksums per table, spot-check queries the owner signs off),
 rollback plan, and the cutover runbook (freeze window or dual-write, DNS/embed switch, Bubble
 kept read-only as archive).
+
+**Size it with real numbers when connected mode is available** (`unbubble:connect` ›
+`references/diagnostics.md`, read-only): file storage used (`bubble_storage_usage_get` — the
+asset-migration volume), WU per day and hour and what spends it (`bubble_workload_usage_by_date`,
+`bubble_workload_usage_breakdown` — peak load to size the new platform, the quietest window for a freeze), plan usage and
+workflow run counts. Cite the figures and the date they were read.
+
+**The Bubble side of the cutover runbook** follows `unbubble:connect` › `references/cutover.md`:
+every step names its tool (`set_data_type_api_exposure`, `create_301_redirect`, the logs) and its
+check, and every write there is an **owner checkpoint** — previewed, approved by the owner, applied
+on a branch, merged and deployed by the owner; the executor never writes to Bubble. Write into the
+runbook that: exposing a type on `test` also publishes the TEST database through the Data API; the
+owner's deploy carries everything pending in `test`, so the changelog since the last deploy is
+reviewed before every deploy; and traffic drain after the switch is verified in the server logs
+(WU per hour falling to background level, each endpoint and webhook no longer seen — anything still
+seen is a caller to re-point).
 
 ### 5 · Produce the rebuild pack
 
@@ -200,6 +236,10 @@ levelup/
                            breaking, scope creep, dual-run drift)
   EXECUTION-CONTRACT.md    rules of engagement for the executing AI — read order, story
                            discipline, the final completeness gate, deviation protocol
+  screen-parity.md|json    (when screens were captured) minimum-parity report per P0 screen and
+                           role, written by unbubble:connect's screen_parity.py — step 6b
+  screen-parity-verdicts.json  the owner's verdict for every missing item (renamed / moved /
+                           dropped / missing)
 ```
 
 The pack must be **self-sufficient for an AI to implement**: no reference to "the conversation",
@@ -220,12 +260,19 @@ minimum:
 3. **Final completeness gate** — the rebuild is only "done" when: every `PARITY-MATRIX.md` row is
    checked off (or carries a signed deviation); `spec_coverage.py` and `parity_check.py` both
    pass; the BR-xxx test suite is green; readiness stories from the enterprise gates (if applied)
-   are done; MIGRATION-PLAN validation is signed by the owner.
+   are done; MIGRATION-PLAN validation is signed by the owner; and, when the Bubble screens were
+   captured, `screen_parity.py --strict` passes on the P0 screens of every role — every missing
+   content or action carries an owner verdict, none is left as `missing` (step 6b).
 4. **Deviation protocol**: anything the executor cannot or believes should not implement becomes a
    listed deviation (what, why, impact) requiring the owner's dated sign-off — dropping a
    documented item silently is a contract violation, and "the AI decided it was unnecessary" is
    not a valid disposition.
-5. **Secrets rule**: integration credentials come from the clone's `<workdir>/secrets/.env`,
+5. **Bubble is the owner's**: the executor never writes to the Bubble app, never deploys it and
+   never creates or reads its API tokens. Every Bubble-side step of the cutover (Data API exposure,
+   redirects, the final deploy) is an **owner checkpoint** in BACKLOG — the executor prepares it and
+   stops; the owner applies it (connected mode, with approval per batch, or by hand) and signs it
+   off.
+6. **Secrets rule**: integration credentials come from the clone's `<workdir>/secrets/.env`,
    mapped old→new by `secrets/ENV-KEYS.md` + the integration map — configure them in the new
    system's secret store / env, never hardcode, never commit `.env` (commit `.env.example`
    instead), and never print values in logs, chats, or docs. Keys marked re-issue/rotate in the
@@ -302,6 +349,30 @@ For every orphan, record a verdict — this is the gate:
 Never let an orphan pass silently: an unclassified orphan is a candidate lost feature. Record
 the run (coverage %, and the classified orphan list) in `ASSESSMENT.md` or a `PARITY.md` note.
 
+### 6b · Minimum screen parity — content and actions per role (connected mode)
+
+`parity_check.py` proves the code touches the data; it cannot see a screen that lost a field, a
+button or a whole tab for one role. When the Bubble screens were captured
+(`unbubble:connect` › `references/screens.md`), capture the same screens of the rebuilt app and
+compare them **whenever a module is reported done** (its P0 screens, every role) and before the
+cutover:
+
+```bash
+python3 <connect>/scripts/capture_screens.py --app <app-id> --target rebuild \
+    --base-url http://localhost:3000 --route-map routes.json --roles anon,admin,agent
+python3 <connect>/scripts/screen_parity.py --app <app-id> --pages <P0 pages> --strict
+```
+
+(`<connect>` = `skills/connect/` of the UnBubble checkout; the rebuilt app's test users sign in
+once per role with `capture-app-session --target rebuild`.) It lists what each Bubble screen offers
+that the rebuilt one does not — headings, labels, fields, buttons and links, images — ignoring
+geometry, typography, colors and spacing. **Visual differences are expected and never fail the
+gate**; only missing content or actions without an owner verdict do. Each item gets a verdict in
+`levelup/screen-parity-verdicts.json`: `renamed` / `moved` (present in another form or place),
+`dropped` (dated owner decision), or `missing` (a real gap → a BACKLOG story, gate stays open).
+The MCP's geometric tools (`bubble_visual_compare`, `bubble_visual_audit`) are not part of this
+gate, and their repair plans target Bubble: never apply them.
+
 ## Quality bar
 
 - Every assessment claim cites evidence from the clone docs/inventory.
@@ -324,3 +395,9 @@ the run (coverage %, and the classified orphan list) in `ASSESSMENT.md` or a `PA
 - After a module is rebuilt, `scripts/parity_check.py` was run and **every** orphan table/column
   it reports is classified (used / deferred-with-reason / fixed) — no silent drops between the
   DATA-MODEL and the running code (step 6).
+- When the Bubble screens were captured: FRONTEND-DESIGN.md carries the content inventory per P0
+  screen and role and states that the captures are never a style reference; after a module is
+  rebuilt, `screen_parity.py --strict` passes on its P0 screens for every role (step 6b).
+- MIGRATION-PLAN.md describes the Data API token correctly (admin token: privacy rules do not limit
+  it; it cannot be scoped; exposure per type is the boundary; a dedicated token created by the
+  owner, deleted after the cutover), and every Bubble-side cutover step is an owner checkpoint.
