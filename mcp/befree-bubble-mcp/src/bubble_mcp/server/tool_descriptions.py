@@ -178,7 +178,10 @@ LEGACY_TOOL_DESCRIPTIONS: dict[str, str] = {
     "reorder_style_states": "Reorder the conditional states of a style (name) to the given order.",
     "create_button_style": "Create a button style preset in context.",
     "rename_style": "Rename an existing style.",
-    "delete_style": "Delete one style (name) after explicit confirm=true.",
+    "delete_style": (
+        "Delete one style after explicit confirm=true. Prefer style_id (exact; a name given alongside must "
+        "match it): a bare name is resolved loosely and can hit another style."
+    ),
     "delete_styles": "Delete several styles matching name/pattern after explicit confirm=true.",
     "clear_custom_styles": "Remove all custom (non-default) styles after explicit confirm=true.",
     # Colors / fonts

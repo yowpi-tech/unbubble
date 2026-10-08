@@ -23664,7 +23664,16 @@ class BubbleCLI:
             **kwargs,
         )
 
-    def delete_style(self, name: str, element_type: str = None, dry_run: bool = False) -> bool:
+    def delete_style(
+        self, name: str = "", element_type: str = None, dry_run: bool = False, style_id: str = None
+    ) -> bool:
+        if style_id:
+            return self._style_lifecycle.definitions.delete_style(
+                name,
+                element_type,
+                dry_run=dry_run,
+                style_id=style_id,
+            )
         return self._style_lifecycle.definitions.delete_style(
             name,
             element_type,

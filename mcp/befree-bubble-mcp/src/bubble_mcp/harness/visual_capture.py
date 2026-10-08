@@ -257,6 +257,13 @@ def _capture_rendered(
                 page.wait_for_timeout(wait_ms)
             captured = page.evaluate(js, {"selector": selector, "styleFields": STYLE_FIELDS, "maxNodes": max_nodes})
             final_url = str(page.url or "")
+            if storage_state and final_url and source_type == "url":
+                # A logged-in capture that ended up on the live Bubble app (redirect) must not pass
+                # silently — and leaves no screenshot behind.
+                from bubble_mcp.harness.app_session import ensure_logged_in_capture_allowed, is_bubble_app_url
+
+                if is_bubble_app_url(final_url):
+                    ensure_logged_in_capture_allowed(final_url, bubble=True)
             if screenshot is not None:
                 screenshot.parent.mkdir(parents=True, exist_ok=True)
                 page.screenshot(path=str(screenshot), full_page=True)
@@ -282,12 +289,6 @@ def _capture_rendered(
     )
     if source_type == "url":
         captured["final_url"] = final_url
-        if storage_state and final_url:
-            # A logged-in capture that ended up on the live Bubble app (redirect) must not pass silently.
-            from bubble_mcp.harness.app_session import ensure_logged_in_capture_allowed, is_bubble_app_url
-
-            if is_bubble_app_url(final_url):
-                ensure_logged_in_capture_allowed(final_url, bubble=True)
         requested_path = urlparse(source).path.rstrip("/")
         final_path = urlparse(final_url).path.rstrip("/")
         # A page the role cannot open usually redirects (to the login page or the index).

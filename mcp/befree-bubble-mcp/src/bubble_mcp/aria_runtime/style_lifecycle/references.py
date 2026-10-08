@@ -287,6 +287,11 @@ class StyleReferenceResolver:
             if not entry.is_default and self._type_matches(entry, normalized_type)
         }
 
+    def exact_style_entry(self, style_id: str) -> _StyleEntry | None:
+        """The style whose id is exactly ``style_id`` — no name, catalog or fuzzy resolution."""
+        self._ensure_index()
+        return self._by_id.get(str(style_id or "").strip())
+
     def default_style_ids(self) -> set[str]:
         """Return every default ID from settings and resolved discovery entries."""
         self._ensure_index()

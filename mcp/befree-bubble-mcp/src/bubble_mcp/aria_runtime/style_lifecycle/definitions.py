@@ -1037,10 +1037,13 @@ class StyleDefinitionService:
 
     def delete_style(
         self,
-        name: str,
+        name: str = "",
         element_type: str | None = None,
         dry_run: bool = False,
+        style_id: str | None = None,
     ) -> bool:
+        if style_id:
+            return self._delete_style_by_id(str(style_id), name, dry_run=dry_run)
         normalized_type = self._references.normalize_element_type(element_type) if element_type else None
         style_id = self._references.find_style_id(name, normalized_type)
         if not style_id and self._references.looks_like_style_id(name, normalized_type):
@@ -1056,6 +1059,30 @@ class StyleDefinitionService:
         if not self._dispatch(payload, "Failed to delete style"):
             return False
         return self._remove_cache_ids({style_id}, names={name})
+
+    def _delete_style_by_id(self, style_id: str, name: str, *, dry_run: bool) -> bool:
+        """UnBubble edition: delete exactly one style by id. Name resolution falls back to catalog,
+        token-subset and default matches, so a stale or shared name could resolve to another style
+        that is in use; with an id nothing is resolved — the id must exist, must not be a default
+        style, and a name given alongside must be that style's name."""
+        entry = self._references.exact_style_entry(style_id)
+        if entry is None:
+            logger.error(f"Style id '{style_id}' not found; nothing deleted.")
+            return False
+        if entry.is_default:
+            logger.error(f"Style '{style_id}' is a default style; nothing deleted.")
+            return False
+        if name and " ".join(name.split()).casefold() != " ".join(entry.name.split()).casefold():
+            logger.error(f"Style id '{style_id}' is named '{entry.name}', not '{name}'; nothing deleted.")
+            return False
+        payload = PayloadBuilder(self._host.appname)
+        payload.add_delete_style(entry.style_id)
+        if dry_run:
+            logger.info(f"\n DRY RUN - Delete Style ({entry.style_id}: {entry.name})")
+            return True
+        if not self._dispatch(payload, "Failed to delete style"):
+            return False
+        return self._remove_cache_ids({entry.style_id}, names={entry.name})
 
     def delete_styles(
         self,

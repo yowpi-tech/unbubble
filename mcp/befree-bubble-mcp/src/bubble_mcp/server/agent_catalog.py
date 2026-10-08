@@ -345,7 +345,7 @@ COMMON_PROPERTY_DESCRIPTIONS: dict[str, str] = {
     "private_key": "Private API token value. Never log or commit real secrets.",
     "exposed_api": "Whether the Bubble data type should be exposed through Bubble's Data API.",
     "include_cache": "Include local cache data in the read-only response.",
-    "style_id": "Exact Bubble style id to rename.",
+    "style_id": "Exact Bubble style id; the style is targeted by id, never by name matching.",
     "theme_json": "Button theme object encoded as JSON, with a base state and optional hover, pressed, focus, or disabled states.",
     "from_url": "Incoming URL path handled by the Bubble 301 redirect rule.",
     "to_url": "Destination URL path for the Bubble 301 redirect rule.",
@@ -1071,6 +1071,8 @@ EXACT_TOOL_FIELDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "add_style_condition": (("profile", "name", "condition"), ("dry_run", "settings_path", *VISUAL_STYLE_FIELDS)),
     "reorder_style_states": (("profile", "name", "order"), ("dry_run", "settings_path")),
     "rename_style": (("profile", "style_id", "new_name"), ("dry_run", "settings_path")),
+    # UnBubble edition: style_id targets one style exactly (names resolve fuzzily)
+    "delete_style": (("profile",), ("dry_run", "settings_path", "style_id", "name", "element_type", "confirm")),
     "create_button_style": (("profile", "name", "theme_json"), ("dry_run", "settings_path")),
     "create_workflow": (("profile", "context", "element_name"), ("dry_run", "settings_path", "event")),
     "log_the_user_in": (("profile", "context", "event_ref", "email_input_ref", "password_input_ref"), ("dry_run", "settings_path", "workflow_id", "action_index", "action_id", "stay_logged_in", "remember_email")),
