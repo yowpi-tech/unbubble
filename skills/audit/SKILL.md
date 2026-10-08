@@ -95,7 +95,8 @@ python3 scripts/bubble_audit.py export.bubble \
   --lang pt \                # report language: pt (default) or en
   --date 2026-07-09 \        # date stamp shown in the report header
   --pages-csv audit.csv \    # ONLY if the user hands you a page-inventory CSV for THIS app (see below)
-  --state progress.md \      # optional: pre-check items already deleted (from the report's Export)
+  --state progress.md \      # optional, repeatable: pre-check items already deleted (report Export
+                             #   .md/.json, or the connected-mode cleanup journal — keys are merged)
   --plugin-names names.json  # optional: extra {pluginId: name} to extend the bundled registry
 ```
 
@@ -112,6 +113,13 @@ on a 100 MB file. It never modifies the export.
 3. **Read the stdout summary** and relay the headline counts to the user, then point them at the
    HTML report file. Lead with the high-confidence categories (backend workflows, option sets,
    reusables, styles) and frame pages carefully (see caveats).
+   **If the first line says `EXPORT INCOMPLETE`, say that before anything else**: some reusable
+   definitions are in the editor index but have no payload in the export (Bubble stopped inlining
+   them for some large apps), so every reference made inside them is invisible and findings in
+   any section can be false positives. Nothing should be deleted from that round — get a complete
+   export first (re-export, or download it through `unbubble:connect`, which re-hydrates the
+   definitions) and run the audit again. The report shows the same warning in red at the top, and
+   `--json` carries it as `export_integrity`.
 4. **Verify the report renders** if you have a browser/preview available (serve the folder with
    `python3 -m http.server` — note macOS blocks serving `~/Downloads`, so copy the HTML to a
    temp dir first, or write it there with `--out`).
@@ -227,6 +235,12 @@ file (browsers sandbox that):
 Recommend this flow to the user: work in the browser (autosaved), and Export the `.md` when they
 want a durable/committable record. When regenerating the report later, pass that file to `--state`.
 
+`--state` is repeatable and merges keys from every file. Besides the report's exports it reads the
+**cleanup journal** the connected mode writes when deletions are applied through the editor
+(`audit/cleanup-applied__<app>.json`, `{"entries": [{key, app_version, merged, …}]}`): an entry
+counts as deleted only if it was applied to `test` itself or to a branch that was later merged —
+deletions on a branch that was discarded never pre-mark anything.
+
 ### Section sign-off — "audit of this section complete" (kept items)
 
 Every section header (1 · Pages … 10 · Removed-plugin refs) has its own checkbox: **"Auditoria
@@ -264,3 +278,10 @@ theming, print CSS. Every category where the audit found nothing renders a green
 ("Todos os X estão em uso.") instead of an empty table, so a clean section is an explicit positive
 result, not a blank. Point the user to that file rather than rebuilding a report in the chat. Use the
 stdout summary (and `--json`) for your own narration and any follow-up analysis.
+
+The `--json` summary (`summary_version: 2`) gives every finding its tracker **`key`** — the exact
+`<category>:<id>` string on the report's checkbox — so downstream tools (the connected-mode cleanup
+plan, the console) never re-derive it. Backend and page custom events share the `customevent:`
+prefix; their `scope` field (`backend` / `page`) tells them apart. It also carries
+`export_integrity` (see step 3) and `provenance` — version, download time and sha256 when the export
+came through the connected mode with a `<export>.meta.json` sidecar (the report header shows it too).
