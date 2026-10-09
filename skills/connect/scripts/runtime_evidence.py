@@ -48,10 +48,19 @@ def candidates_from(audit):
 
 
 def row_time(row):
+    """ISO time of a log row. Jetstream mixes units — seconds, milliseconds or microseconds since
+    the epoch, as numbers or digit strings — so the magnitude decides."""
     for key in ('timestamp', 'created', 'created_at', 'time'):
         value = row.get(key) if isinstance(row, dict) else None
-        if isinstance(value, (int, float)):
-            return datetime.fromtimestamp(value / 1000.0, tz=timezone.utc).isoformat().replace('+00:00', 'Z')
+        if isinstance(value, str) and value.strip().isdigit():
+            value = int(value.strip())
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            seconds = value / 1e6 if value > 1e14 else value / 1e3 if value > 1e11 else value
+            try:
+                stamp = datetime.fromtimestamp(seconds, tz=timezone.utc).replace(microsecond=0)
+            except (OverflowError, OSError, ValueError):
+                continue
+            return stamp.isoformat().replace('+00:00', 'Z')
         if isinstance(value, str) and value:
             return value
     return None
