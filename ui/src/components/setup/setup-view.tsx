@@ -315,6 +315,18 @@ function ConnectedCard({ connected: c, repo }: { connected: ConnectedModeInfo; r
                     </span>
                   ))}
                 </p>
+                <p className="text-xs text-zinc-500">
+                  {t('setup.connect.sharedSignIn')}:{' '}
+                  <span className={c.browsers.shared ? 'text-green-700 dark:text-green-400' : 'text-zinc-400'}>
+                    {c.browsers.shared ? t('setup.connect.sharedYes') : t('setup.connect.sharedNo')}
+                  </span>
+                </p>
+                {!c.browsers.shared && c.browsers.profiles.length + c.browsers.importable.length > 0 && (
+                  <div className="space-y-1">
+                    <p className="text-xs text-zinc-500">{t('setup.connect.importHint', { n: c.browsers.profiles.length + c.browsers.importable.length })}</p>
+                    <CommandBlock text={`${launcher} import-browser-profile`} />
+                  </div>
+                )}
                 <p className="text-xs text-zinc-400">
                   {t('setup.connect.home')}: <span className="font-mono">{c.home}</span>
                 </p>

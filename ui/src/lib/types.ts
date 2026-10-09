@@ -370,6 +370,8 @@ export interface ConnectedModeInfo {
   hosts: Record<string, boolean>;
   profiles: ConnectedProfile[];
   exports: Record<string, { count: number; latest: ExportProvenance }>;
+  /** One browser sign-in shared by every profile; candidates that may already be signed in. */
+  browsers: { shared: boolean; profiles: string[]; importable: string[] };
 }
 
 export interface ProjectConnection {

@@ -89,6 +89,7 @@ export async function connectedMode(): Promise<ConnectedModeInfo> {
     hosts: {},
     profiles: [],
     exports: {},
+    browsers: { shared: false, profiles: [], importable: [] },
   };
   if (!base.available) return base;
   const { stdout, error } = await doctorJson(launcher);
@@ -117,6 +118,11 @@ export async function connectedMode(): Promise<ConnectedModeInfo> {
     hosts: Object.fromEntries(Object.entries(obj(report.hosts)).map(([k, v]) => [k, v === true])),
     profiles: (Array.isArray(report.profiles) ? report.profiles : []).map((p) => profileFrom(obj(p))),
     exports,
+    browsers: {
+      shared: obj(report.browsers).shared === true,
+      profiles: strs(obj(report.browsers).profiles),
+      importable: strs(obj(report.browsers).importable),
+    },
   };
 }
 
