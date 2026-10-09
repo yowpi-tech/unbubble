@@ -13,47 +13,74 @@
   <img alt="Python 3.8+ · stdlib-only core" src="https://img.shields.io/badge/python-3.8%2B%20%C2%B7%20stdlib--only%20core-3776AB.svg">
   <img alt="Agent Skills" src="https://img.shields.io/badge/agent%20skills-SKILL.md-8b5cf6.svg">
   <img alt="Works with Claude Code, Codex, Cursor and more" src="https://img.shields.io/badge/works%20with-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Cursor%20%C2%B7%20%E2%80%A6-f97316.svg">
+  <a href="https://github.com/pedrobefree/befree-bubble-mcp"><img alt="Connected mode built on befree-bubble-mcp" src="https://img.shields.io/badge/connected%20mode-built%20on%20befree--bubble--mcp-0ea5e9.svg"></a>
 </p>
 
 ---
 
-## What UnBubble is
+UnBubble is an open-source toolkit for owners, agencies and developers who are moving an app off
+**Bubble.io** to a codebase they own, without losing features, data or credentials on the way. You
+hand your coding agent the app's `.bubble` export; UnBubble's skills give it the method, and its
+scripts give it facts instead of guesses:
 
-UnBubble is an open-source toolkit for migrating an application built on **Bubble.io** to a
-conventional codebase, without losing features, data or credentials on the way. It turns the
-`.bubble` export of an app into a complete, verifiable rebuild pack in three steps:
+1. **Audit** — what in the app is dead, so the owner can clean it up and re-export it lean.
+2. **Clone** — what remains, written up as verifiable as-is documentation and a feature-parity PRD,
+   with every credential preserved.
+3. **Level-up** — the target architecture, the new data model, the data-migration plan and an
+   AI-ready backlog for the rebuild.
 
-1. **Audit** — find every dead entity in the export (pages, reusables, backend workflows, option
-   sets, plugins, styles, design tokens, tables, fields, custom events, API Connector calls,
-   references to removed plugins, mobile views) so the owner can clean the app and re-export it
-   lean. Interactive HTML report with confidence levels, a deletion tracker and a per-section
-   sign-off for items the owner decides to keep.
-2. **Clone** — reverse-engineer the lean export into as-is technical documentation (database,
-   external APIs, plugins, Data API exposure, backend workflows, pages and business rules written
-   in verifiable form), a feature-parity PRD, a parity ledger with one row per entity, and a
-   `secrets/.env` that preserves every API key the export carries — values never enter docs or
-   chat.
-3. **Level-up** — assess the tech debt, design the target architecture (information security
-   and result reliability first, UX second), redesign the data model with a field-by-field
-   mapping, write the Bubble → new-system data-migration plan, and produce PRD v2, a sequenced
-   atomic backlog, risks and an execution contract. Two gates keep the rebuild honest:
-   `spec_coverage.py` (every requirement has a story) and `parity_check.py` (every migrated
-   column is actually used by the new code).
+Everything runs on your machine. An optional **connected mode** reaches into the live app — logs,
+workload, fresh exports, what each user role sees, the cleanup applied on a branch — and is built on
+[**befree-bubble-mcp**](https://github.com/pedrobefree/befree-bubble-mcp) by Pedro Duarte (Befree
+Academy), vendored here in a hardened edition. See [Credits](#credits).
 
-Every step is a **skill**: a `SKILL.md` with the method, plus dependency-free Python scripts that
-do the deterministic work on the export. A **local web console** tracks each project through the
-three steps. Everything runs on your machine; nothing is uploaded anywhere.
+## Why
 
-An optional fourth skill, **`connect`**, works on the *live* app instead of a file — logs, workload
-and changelog, fresh exports, logged-in screen captures, and the audit cleanup applied on a branch
-with the owner's approval — through a hardened MCP server vendored in `mcp/`. The three core steps
-never need it ([Connected mode](#connected-mode-optional)).
+- **A Bubble app leaves with one file.** The `.bubble` export is a single JSON document: every page,
+  element, workflow, data type, option set, plugin and API call, wired together by generated ids.
+  It is the only complete description of the app, and it is too big and too indirect to read by
+  hand.
+- **Years of editing leave dead weight.** Pages nothing navigates to, workflows nothing triggers,
+  plugins nobody uses (some still on a paid plan), fields nothing reads. Rebuilding them is waste;
+  rebuilding without knowing which ones they are is guesswork.
+- **An agent reading a raw export guesses.** UnBubble's scripts resolve the references
+  deterministically — what points to what, what is dead, which keys exist, which migrated columns
+  the new code really uses — and the skills turn those facts into documents a person can check.
+- **A rebuild is more than code.** Credentials, Data API consumers, the data migration and the
+  cutover are where migrations break; the pipeline plans each of them explicitly.
 
-## Not only for Claude Code
+## How it works
 
-The skills follow the **Agent Skills** convention — a folder with a `SKILL.md` — so any coding
-agent that reads that format can run the pipeline. The Python scripts also run on their own, with
-no agent at all.
+```mermaid
+flowchart LR
+  X[".bubble export"] --> A["1 · audit"]
+  A -- "owner deletes the dead entities and re-exports" --> L["lean .bubble"]
+  L --> C["2 · clone"]
+  C --> U["3 · level-up"]
+  U --> R["rebuild: your agent, your stack"]
+```
+
+| Step | Skill | Input | Output |
+|---|---|---|---|
+| 1 | `audit` | `.bubble` export | Interactive HTML report of unused and dead entities in 10 areas — pages, reusables, backend workflows, option sets, plugins, styles and design tokens, tables and fields, custom events, API Connector calls, references to removed plugins, mobile views — with confidence levels, a deletion tracker and a per-section sign-off (items kept on purpose are recorded and questioned in step 2). The owner cleans the app and **re-exports a lean `.bubble`** |
+| 2 | `clone` | lean `.bubble` | As-is docs (database, external APIs, plugins, Data API exposure, backend workflows, pages and business rules written in verifiable form) + **PRD-clone** (feature-parity spec) + **PARITY-MATRIX** (one disposition per entity) + **`secrets/.env` + `ENV-KEYS.md`** (every credential the export carries, preserved for the rebuild — values never enter docs or chat) |
+| 3 | `level-up` | clone docs + PRD | Tech-debt assessment, target architecture (information security and result reliability first, UX second), frontend design brief, new data model with a field-by-field old → new mapping, **data-migration plan** (CSV vs Data API, cutover, validation), PRD v2, a sequenced atomic backlog, risks and an execution contract |
+
+Two gates keep the rebuild honest: `spec_coverage.py` (every requirement has a story) and
+`parity_check.py` (every migrated column is actually used by the new code).
+
+Every step is a **skill** — a `SKILL.md` with the method plus dependency-free Python scripts that do
+the deterministic work on the export — and each skill is standalone. A **local web console** tracks
+every project through the three steps. With the optional connected mode the same chain reaches into
+the live app: fresh exports with provenance, runtime evidence for the audit's candidates, the
+cleanup applied on a branch, what each user role sees per screen, and the Bubble side of the
+cutover.
+
+## Works with the agent you already use
+
+The skills follow the **Agent Skills** convention — a folder with a `SKILL.md` — so any coding agent
+that reads that format can run the pipeline. The Python scripts also run on their own, with no
+agent at all.
 
 | Host | How the skills are installed | How they show up |
 |---|---|---|
@@ -64,43 +91,6 @@ no agent at all.
 
 The console's **Install & onboarding** page detects where the skills are installed on the machine,
 checks whether each copy is in sync with the repo, and prints the exact install commands per host.
-
-## The pipeline
-
-| Step | Skill | Input | Output |
-|---|---|---|---|
-| 1 | `audit` | `.bubble` export | Interactive HTML report of unused/dead entities (10 areas) with confidence levels, a deletion tracker and a per-section sign-off (items kept on purpose are recorded and questioned in step 2) → the owner cleans the app in the Bubble editor and **re-exports a lean `.bubble`** |
-| 2 | `clone` | lean `.bubble` | As-is docs (database, external APIs, plugins, Data API, backend workflows, pages & business rules) + **PRD-clone** (feature-parity spec) + **PARITY-MATRIX** (one disposition per entity) + **`secrets/.env` + `ENV-KEYS.md`** (every credential preserved for the rebuild) |
-| 3 | `level-up` | clone docs + PRD | Assessment, target architecture, frontend design brief, new data model + old→new mapping, **migration plan** (CSV vs Data API, cutover, validation), PRD v2, atomic backlog, risks, execution contract — an AI-ready rebuild pack that passes the `spec_coverage` gate |
-
-The steps chain — audit → clean → re-export → clone → level-up → rebuild — but each skill is
-standalone, with its own scripts and references. With the optional connected mode the same chain
-reaches into the live app: fresh exports with provenance, runtime evidence on the audit's
-candidates, the cleanup applied on a branch, what each user role sees per screen, and the Bubble
-side of the cutover.
-
-## What is in the repository
-
-```
-skills/
-  audit/        SKILL.md · scripts/bubble_audit.py · references/ (export reference model,
-                marketplace plugin names and pricing)
-  clone/        SKILL.md · scripts/bubble_inventory.py · scripts/bubble_secrets.py
-  level-up/     SKILL.md · scripts/spec_coverage.py · scripts/parity_check.py ·
-                references/assessment-checklist.md
-  connect/      optional connected mode · SKILL.md · references/ (setup, diagnostics, cleanup,
-                evidence, screens, cutover) · scripts/ (export download, runtime evidence, cleanup
-                plan + journal, screen captures, screen parity)
-ui/             the local console (Next.js) — progress per project, embedded reports,
-                docs viewer, backlog tracking, install detection and onboarding
-mcp/            the connected mode's MCP server: vendored befree-bubble-mcp (MIT, hardened
-                UnBubble edition), installer, launcher
-.claude-plugin/ plugin manifest for Claude Code
-LICENSE · NOTICE
-```
-
-`skills/audit/references/reference-model.md` is the canonical description of how a `.bubble`
-export stores and references entities — the knowledge the scripts encode.
 
 ## Install
 
@@ -125,13 +115,12 @@ mkdir -p ~/.codex/skills && for s in audit clone level-up; do ln -sfn ~/UnBubble
 ln -sfn ~/UnBubble/skills/connect ~/.codex/skills/unbubble-connect   # optional: connected mode
 ```
 
-**Other Agent Skills hosts** — same three links into the host's skills folder (for example
-`~/.cursor/skills`, `~/.copilot/skills`, `~/.gemini/skills`) or into the shared
-`~/.agents/skills`, plus `connect` if you want the connected mode. Check the host's documentation
-for the exact folder.
+**Other Agent Skills hosts** — the same three links into the host's skills folder (for example
+`~/.cursor/skills`, `~/.copilot/skills`, `~/.gemini/skills`) or into the shared `~/.agents/skills`,
+plus `connect` if you want the connected mode. Check the host's documentation for the exact folder.
 
 The connected mode also needs its MCP server installed once — see
-[Connected mode › Install](#install-1).
+[Connected mode › Install and sign in](#install-and-sign-in).
 
 ## Quick start
 
@@ -176,7 +165,7 @@ leaves the machine.
 
 ## Running the scripts without an agent
 
-The core scripts are Python 3.8+ with the standard library only. They never modify the export.
+The core scripts are Python 3.8+ with the standard library only, and they never modify the export.
 The connected-mode scripts (`skills/connect/scripts/`) are stdlib too, but drive the MCP server
 installed by `mcp/install.py`.
 
@@ -194,15 +183,19 @@ python3 skills/level-up/scripts/spec_coverage.py --spec docs/07-business-rules.m
 python3 skills/level-up/scripts/parity_check.py --schema <app>/supabase/migrations --app <app>/src --out levelup
 ```
 
-The interpretive parts of the pipeline — reading business rules out of workflows, writing the
-docs and the PRDs, designing the target architecture — are what the skills guide an agent
-through; the scripts give it deterministic facts to work from.
+The interpretive parts of the pipeline — reading business rules out of workflows, writing the docs
+and the PRDs, designing the target architecture — are what the skills guide an agent through; the
+scripts give it deterministic facts to work from.
 
 ## Connected mode (optional)
 
 The three core steps work offline on a `.bubble` file and never need this. The fourth skill,
-**`connect`**, adds what only the live Bubble editor can answer, through **befree-bubble-mcp** (MIT,
-by Befree) vendored in `mcp/` as a hardened *UnBubble edition*:
+**`connect`**, adds what only the live Bubble editor can answer, and it runs on
+[**befree-bubble-mcp**](https://github.com/pedrobefree/befree-bubble-mcp), the open-source (MIT)
+Bubble MCP server and CLI by Pedro Duarte (Befree Academy). Signing in to the editor, downloading
+exports, reading logs, metrics and the changelog, capturing what a page shows and applying edits
+are befree-bubble-mcp's work. UnBubble vendors it in `mcp/` as a hardened *UnBubble edition* and adds
+the safety model below, the installer and launcher, and the `connect` skill with its scripts.
 
 - **Read-only diagnostics** — server logs, workload units (WU) and what spends them, workflow run
   counts, plan usage, file storage, and the editor changelog ("who changed what, when").
@@ -218,6 +211,10 @@ by Befree) vendored in `mcp/` as a hardened *UnBubble edition*:
   actions only: the new design system rules the visuals).
 - **The Bubble side of the cutover** — Data API exposure, 301 redirects, traffic-drain checks.
 
+> **Experimental.** befree-bubble-mcp is in early alpha and drives Bubble's undocumented editor
+> endpoints, which can change without notice. Use connected mode only with the app owner's consent,
+> and never unattended.
+
 ### Requirements
 
 - Python ≥ 3.11 for the MCP (the installer uses `uv` when available, or a system Python ≥ 3.11) and
@@ -225,7 +222,7 @@ by Befree) vendored in `mcp/` as a hardened *UnBubble edition*:
 - A Bubble account that is a **collaborator on the app** — preferably a dedicated one per client.
 - A paid Bubble plan to download exports, and a plan with branches for the cleanup on a branch.
 
-### Install
+### Install and sign in
 
 ```bash
 python3 ~/UnBubble/mcp/install.py --register claude   # or codex | cursor | all | none (it asks by default)
@@ -246,10 +243,18 @@ python3 ~/UnBubble/mcp/launch.py cli profile add <app-id> --app-id <app-id> --ap
 python3 ~/UnBubble/mcp/launch.py cli session login --profile <app-id> --app-id <app-id>
 ```
 
+One sign-in serves every app — Bubble signs in an account, not an app — so after the first one,
+`session login` for another app opens already signed in and finishes on its own. Already signed in
+through an earlier befree-bubble-mcp install? Reuse that browser instead of signing in again with
+`python3 ~/UnBubble/mcp/launch.py import-browser-profile` (run it yourself; it lists the
+candidates). A test version protected by a password is unlocked for screen captures with
+`python3 ~/UnBubble/mcp/launch.py cli eval save-http-auth --app-id <app-id>` — the password is typed
+in your terminal, never in the chat.
+
 ### Safety model
 
-The MCP drives Bubble's **undocumented editor endpoints** with the session of a Bubble account, so
-the UnBubble edition is built to fail closed:
+The MCP drives Bubble's editor with the session of a Bubble account, so the UnBubble edition is
+built to fail closed:
 
 - **Never live.** A write guard on every HTTP request refuses writes to the live version, the
   deploy endpoints, payloads bound to another app, and deleting a branch the MCP did not create.
@@ -263,11 +268,10 @@ the UnBubble edition is built to fail closed:
   branch, a preview and the owner's approval per batch, and verification by a fresh export.
 - **Secrets stay out of transcripts.** `settings.secure`, cookies and token formats are redacted
   from tool results and CLI output; sessions live under `~/.unbubble/mcp/config` (owner-only);
-  logins are done by a human in a visible browser; logs are reported as counts, never rows.
+  logins and passwords are typed by a human, in a visible browser or a terminal prompt; logs are
+  reported as counts, never rows.
 
-Use it only with the app owner's consent and never unattended — Bubble can change its editor
-endpoints without notice. Details in [`skills/connect/SKILL.md`](skills/connect/SKILL.md) and
-[`mcp/README.md`](mcp/README.md).
+Details in [`skills/connect/SKILL.md`](skills/connect/SKILL.md) and [`mcp/README.md`](mcp/README.md).
 
 ### What it does not do
 
@@ -293,10 +297,10 @@ only own state is `<project>/unbubble.json`. Details in [`ui/README.md`](ui/READ
 
 ## Languages
 
-The console ships in **English**, **Português (Brasil)** and **Español**; the language menu in
-the header lists whatever is registered, and a first visit follows the browser's
-`Accept-Language`. The audit report has its own language switch (`bubble_audit.py --lang pt|en`),
-and the skills themselves are written in English but work in whatever language the user speaks.
+The console ships in **English**, **Português (Brasil)** and **Español**; the language menu in the
+header lists whatever is registered, and a first visit follows the browser's `Accept-Language`. The
+audit report has its own language switch (`bubble_audit.py --lang pt|en`), and the skills
+themselves are written in English but work in whatever language the user speaks.
 
 ### How an LLM (or a human) adds a language
 
@@ -333,8 +337,31 @@ language code (`es`, `fr`, `de`, `it`…).
    `--lang xx` and open it to check.
 5. Mention the new language in this chapter and in `ui/README.md`.
 
-Do not translate the skills (`skills/*/SKILL.md`) or the scripts' output files: agents read them
-as instructions, and the pipeline's artifacts are written in the language the user is working in.
+Do not translate the skills (`skills/*/SKILL.md`) or the scripts' output files: agents read them as
+instructions, and the pipeline's artifacts are written in the language the user is working in.
+
+## What is in the repository
+
+```
+skills/
+  audit/        SKILL.md · scripts/bubble_audit.py · references/ (export reference model,
+                marketplace plugin names and pricing)
+  clone/        SKILL.md · scripts/bubble_inventory.py · scripts/bubble_secrets.py
+  level-up/     SKILL.md · scripts/spec_coverage.py · scripts/parity_check.py ·
+                references/assessment-checklist.md
+  connect/      optional connected mode · SKILL.md · references/ (setup, diagnostics, cleanup,
+                evidence, screens, cutover) · scripts/ (export download, runtime evidence, cleanup
+                plan + journal, screen captures, screen parity)
+ui/             the local console (Next.js) — progress per project, embedded reports,
+                docs viewer, backlog tracking, install detection and onboarding
+mcp/            connected mode: befree-bubble-mcp by Befree (MIT), vendored as the hardened
+                UnBubble edition · installer · launcher · vendoring manifest
+.claude-plugin/ plugin manifest for Claude Code
+LICENSE · NOTICE
+```
+
+`skills/audit/references/reference-model.md` is the canonical description of how a `.bubble`
+export stores and references entities — the knowledge the scripts encode.
 
 ## Privacy and safety
 
@@ -351,6 +378,58 @@ as instructions, and the pipeline's artifacts are written in the language the us
   console checks only whether a session exists and when it was saved — and logs are reported as
   counts, never rows.
 
+## Contributing
+
+Issues and pull requests are welcome; contributions are accepted under the Apache License 2.0.
+
+- **Never attach a real app's data** to an issue or a pull request. A `.bubble` export carries the
+  whole app and often live API keys; `.env` files, logs and screenshots carry keys and personal
+  data. Reproduce with a small synthetic export or a redacted excerpt.
+- **Security problems** — report them privately to marlon@yowpi.com, not in a public issue.
+- **`mcp/befree-bubble-mcp/` is vendored and never edited here.** A change to it is made in the
+  fork, passes the fork's test suite and arrives as a new snapshot through `mcp/sync_vendor.py`
+  ([`mcp/VENDORED.md`](mcp/VENDORED.md)).
+- Before opening a pull request: `python3 -m py_compile` on the scripts you touched, and
+  `cd ui && npx tsc --noEmit && npx eslint src` for the console.
+
+## Credits
+
+### befree-bubble-mcp
+
+[**befree-bubble-mcp**](https://github.com/pedrobefree/befree-bubble-mcp) · Copyright © 2026 Befree ·
+MIT License · created by **Pedro Duarte (Befree Academy)**, with contributors.
+
+Connected mode is built on befree-bubble-mcp, a local-first Bubble automation toolkit: an MCP server
+and a CLI that work with the Bubble editor through a session captured in a real browser. Every live
+operation in connected mode goes through its code — the editor sign-in, export downloads, logs,
+workload and plan metrics, the changelog and branches, page captures and the edits of an approved
+cleanup. Mapping an undocumented editor well enough to automate it is the hard part of connected
+mode, and that work is Befree's.
+
+How UnBubble uses it:
+
+- `mcp/befree-bubble-mcp/` is a snapshot of the fork
+  [yowpi-tech/befree-bubble-mcp](https://github.com/yowpi-tech/befree-bubble-mcp), pinned to one
+  commit with a sha256 per file. [`mcp/VENDORED.md`](mcp/VENDORED.md) names the commit and what is
+  not shipped, and `python3 mcp/sync_vendor.py --check` proves the tree is untouched.
+- The *UnBubble edition* tightens it for an agent working on client apps during a migration: a
+  fail-closed write guard (never the live version, never a deploy), a tool policy at the MCP
+  boundary, broader redaction of secrets, logged-in screen captures with test users and one shared
+  sign-in. The parts connected mode does not use — the Figma bridge, the Chrome extension and the
+  Node renderers — are not shipped.
+- Its license is kept in [`mcp/befree-bubble-mcp/LICENSE`](mcp/befree-bubble-mcp/LICENSE) and
+  credited in [`NOTICE`](NOTICE).
+
+UnBubble is not affiliated with or endorsed by Befree. Report problems with connected mode here, and
+upstream only when they reproduce with befree-bubble-mcp itself. If connected mode saves you time,
+give [befree-bubble-mcp](https://github.com/pedrobefree/befree-bubble-mcp) a star.
+
+### Bubble
+
+Bubble and Bubble.io are trademarks of Bubble Group, Inc. UnBubble is an independent project, not
+affiliated with or endorsed by Bubble Group. It reads the exports an app owner downloads and, in
+connected mode, works through the editor session of an account with access to the app.
+
 ## License and attribution
 
 UnBubble is released under the **Apache License 2.0** — see [`LICENSE`](LICENSE).
@@ -359,17 +438,14 @@ Copyright © 2026 **Yowpi Tech** and **Marlon Trettin**.
 
 You may use, modify and redistribute it, commercially or not, provided that every copy or
 derivative work keeps the [`LICENSE`](LICENSE) and the [`NOTICE`](NOTICE) file — that is, the
-attribution to Yowpi Tech and Marlon Trettin as the original authors — and states the changes
-you made (Section 4 of the license). A suggested credit line for derivative works:
+attribution to Yowpi Tech and Marlon Trettin as the original authors — and states the changes you
+made (Section 4 of the license). A suggested credit line for derivative works:
 
 > Based on UnBubble (https://github.com/yowpi-tech/unbubble), © 2026 Yowpi Tech and Marlon
 > Trettin, Apache License 2.0.
 
-Contributions are welcome and are accepted under the same license.
-
-The optional connected mode in `mcp/` vendors **befree-bubble-mcp** by Befree
-(https://github.com/pedrobefree/befree-bubble-mcp), MIT License — its license is kept in
-`mcp/befree-bubble-mcp/LICENSE` and credited in [`NOTICE`](NOTICE).
+The vendored `mcp/befree-bubble-mcp/` keeps its own **MIT License** (© 2026 Befree); see
+[Credits](#credits) and [`NOTICE`](NOTICE).
 
 ## Author
 
