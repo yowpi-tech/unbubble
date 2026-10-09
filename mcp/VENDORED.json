@@ -262,12 +262,12 @@
   "src/bubble_mcp/visual_defaults.py": "4894fd5332439cb3e9fdb7e02a7e32590008b20571081be2dd980c06d82c506b"
  },
  "source": {
-  "commit": "0191a52f4665ea29122ee72091ddb21e420d1eae",
-  "commit_date": "2026-10-09T11:43:27-03:00",
+  "commit": "0dbe8231e67d993ad8329996e22e21c5417c0183",
+  "commit_date": "2026-10-09T16:08:58-03:00",
   "ref": "unbubble/hardening",
   "repository": "https://github.com/yowpi-tech/befree-bubble-mcp.git",
   "upstream": "https://github.com/pedrobefree/befree-bubble-mcp"
  },
- "synced_at": "2026-10-09T14:43:54+00:00",
+ "synced_at": "2026-10-09T19:09:14+00:00",
  "total_bytes": 6769156
 }
