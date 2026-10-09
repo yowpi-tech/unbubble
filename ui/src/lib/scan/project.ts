@@ -1,6 +1,7 @@
 import 'server-only';
 import fs from 'node:fs';
 import path from 'node:path';
+import { projectConnection } from '../connect';
 import { firstHeading, latestMtime, listFiles, readText } from '../fsx';
 import { projectsDir } from '../paths';
 import { readState } from '../state';
@@ -124,6 +125,7 @@ export function getProject(id: string): ProjectDetail | null {
     levelup,
     state,
     files,
+    connection: projectConnection(id),
   };
 }
 

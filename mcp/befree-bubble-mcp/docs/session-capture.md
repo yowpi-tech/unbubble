@@ -1,0 +1,70 @@
+# Session Capture
+
+Session storage is enabled through manual import and optional browser-assisted
+login.
+
+Current manual format:
+
+```json
+{
+  "appId": "my-bubble-app",
+  "url": "https://bubble.io/page?id=my-bubble-app",
+  "headers": {
+    "Cookie": "...",
+    "User-Agent": "..."
+  },
+  "appVersion": "test"
+}
+```
+
+Import:
+
+```bash
+bubble-mcp session import --profile my-app --file ./bubble-session.json
+```
+
+Browser-assisted capture:
+
+```bash
+python -m pip install "befree-bubble-mcp[browser]"
+python -m playwright install chromium
+bubble-mcp session login --profile my-app --app-id my-bubble-app --app-version test
+bubble-mcp session list
+bubble-mcp session inspect --profile my-app
+```
+
+`session login` uses a persistent local Chromium profile under the Bubble MCP
+config directory, opens the Bubble editor, and polls until the captured session
+passes a real `calculate_derived` request. `--wait-seconds` is the maximum
+capture window and defaults to 600 seconds to cover password and two-factor
+authentication. Keep the browser open until the validation message appears.
+
+The login command writes progress to stderr. Wait for:
+
+```text
+[bubble-mcp session] Bubble editor session validated (calculate_derived succeeded). You can close the browser now.
+```
+
+After the validation message appears, it is safe to close the browser. The command will
+save the session and print the final redacted JSON result to stdout. Pass
+`--quiet` to disable progress output in automated scripts.
+
+Use `session inspect` to verify, without printing secrets, which session header
+keys were stored and which Bubble write headers will be computed for
+`/appeditor/write`.
+
+Provider roadmap:
+
+- `manual`: import a local session.
+- `browser`: open a local Chromium browser for Bubble login through Playwright.
+- `extension`: receive editor context/write events from the shipped Chrome
+  extension companion through the local listener:
+  `bubble-mcp extension companion serve --port 3847`.
+- `aria-adapter`: optional private adapter outside the open source core.
+
+Rules:
+
+- Full session data stays local.
+- Session data is stored locally under the configured config directory.
+- UI clients receive only metadata.
+- Logs and reports redact secret-like fields.

@@ -136,6 +136,34 @@ export function AuditView({ project }: { project: ProjectDetail }) {
                     )}
                   </div>
                 )}
+                {a.journal && (
+                  <div className="mt-2 text-xs text-zinc-500 space-y-0.5">
+                    <p>
+                      {t('audit.journal')}: <span className="font-mono">{a.journal.path.replace('audit/', '')}</span> ·{' '}
+                      <span className="font-semibold tabular-nums">{a.journal.applied}</span> {t('audit.journal.applied')}
+                      {a.journal.verified > 0 && (
+                        <>
+                          {' · '}
+                          <span className="tabular-nums">{a.journal.verified}</span> {t('audit.journal.verified')}
+                        </>
+                      )}
+                      {a.journal.failed > 0 && (
+                        <>
+                          {' · '}
+                          <span className="tabular-nums text-red-600 dark:text-red-400">{a.journal.failed}</span> {t('audit.journal.failed')}
+                        </>
+                      )}
+                    </p>
+                    {a.journal.pending > 0 && (
+                      <p className="text-amber-700 dark:text-amber-400">
+                        {t('audit.journal.pending', {
+                          n: a.journal.pending,
+                          branches: a.journal.versions.filter((v) => v.pending > 0).map((v) => v.appVersion).join(', '),
+                        })}
+                      </p>
+                    )}
+                  </div>
+                )}
                 <p className="mt-2 text-xs text-zinc-400">{t('audit.trackerHint')}</p>
               </CardContent>
             </Card>

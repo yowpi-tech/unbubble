@@ -1,0 +1,452 @@
+"""Authenticated Bubble editor write client."""
+
+from __future__ import annotations
+
+import json
+import random
+import time
+from dataclasses import dataclass
+from typing import Any, Callable
+from urllib import error, request
+
+from bubble_mcp.core.redaction import redact_sensitive
+from bubble_mcp.core.write_guard import check_editor_request
+from bubble_mcp.sessions.store import BubbleSessionData, editor_write_session_status
+
+
+EDITOR_WRITE_URL = "https://bubble.io/appeditor/write"
+EDITOR_CALCULATE_DERIVED_URL = "https://bubble.io/appeditor/calculate_derived"
+EDITOR_GET_PLUGIN_CONFLICTS_URL = "https://bubble.io/appeditor/get_plugin_conflicts"
+EDITOR_NOTIFY_AI_CONTEXT_CHANGE_URL = "https://bubble.io/appeditor/notify_ai_app_context_change"
+EDITOR_WRITE_TIMEOUT_SEC = 80.0
+
+DEFAULT_DERIVED_FUNCTIONS: list[dict[str, Any]] = [
+    {"function_name": "ElementTypeToPath", "args": [], "verbose": False},
+]
+
+
+@dataclass(frozen=True)
+class HttpResponse:
+    status: int
+    body: str
+    headers: dict[str, str]
+
+
+HttpTransport = Callable[[str, bytes, dict[str, str], float], HttpResponse]
+
+
+def default_http_transport(
+    url: str,
+    body: bytes,
+    headers: dict[str, str],
+    timeout: float,
+) -> HttpResponse:
+    # Backstop: every editor POST that reaches the network passes the write guard, even when a
+    # caller skipped the session-aware check below.
+    check_editor_request(url, body)
+    req = request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with request.urlopen(req, timeout=timeout) as response:
+            response_body = response.read().decode("utf-8", errors="replace")
+            return HttpResponse(
+                status=int(response.status),
+                body=response_body,
+                headers={str(key): str(value) for key, value in response.headers.items()},
+            )
+    except error.HTTPError as exc:
+        response_body = exc.read().decode("utf-8", errors="replace")
+        return HttpResponse(
+            status=int(exc.code),
+            body=response_body,
+            headers={str(key): str(value) for key, value in exc.headers.items()},
+        )
+
+
+def normalize_write_payload(payload: dict[str, Any], session: BubbleSessionData) -> dict[str, Any]:
+    candidate = payload.get("body") if isinstance(payload.get("body"), dict) else payload
+    normalized = json.loads(json.dumps(candidate))
+    if not isinstance(normalized, dict):
+        raise ValueError("Bubble write payload must be a JSON object.")
+
+    app_id = str(
+        normalized.get("appname")
+        or payload.get("appname")
+        or payload.get("app_id")
+        or payload.get("appId")
+        or session.app_id
+        or ""
+    ).strip()
+    if not app_id:
+        raise ValueError("Bubble write payload is missing appname/app_id.")
+    normalized["appname"] = app_id
+
+    if not isinstance(normalized.get("changes"), list):
+        raise ValueError("Bubble write payload must include a changes array.")
+    if "app_version" not in normalized:
+        normalized["app_version"] = session.app_version or "test"
+    if "appVersion" not in normalized:
+        normalized["appVersion"] = normalized["app_version"]
+    return normalized
+
+
+def normalize_calculate_derived_payload(
+    payload: dict[str, Any],
+    session: BubbleSessionData,
+    *,
+    derived: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    candidate = payload.get("body") if isinstance(payload.get("body"), dict) else payload
+    normalized = json.loads(json.dumps(candidate))
+    if not isinstance(normalized, dict):
+        raise ValueError("Bubble calculate_derived payload must be a JSON object.")
+
+    app_id = str(
+        normalized.get("appname")
+        or payload.get("appname")
+        or payload.get("app_id")
+        or payload.get("appId")
+        or session.app_id
+        or ""
+    ).strip()
+    if not app_id:
+        raise ValueError("Bubble calculate_derived payload is missing appname/app_id.")
+
+    app_version = str(
+        normalized.get("app_version")
+        or payload.get("app_version")
+        or payload.get("appVersion")
+        or session.app_version
+        or "test"
+    ).strip()
+    normalized = {
+        "derived": derived or normalized.get("derived") or DEFAULT_DERIVED_FUNCTIONS,
+        "appname": app_id,
+        "app_version": app_version or "test",
+    }
+    if not isinstance(normalized["derived"], list):
+        raise ValueError("Bubble calculate_derived payload must include a derived array.")
+    return normalized
+
+
+def normalize_plugin_conflicts_payload(payload: dict[str, Any], session: BubbleSessionData) -> dict[str, Any]:
+    candidate = payload.get("body") if isinstance(payload.get("body"), dict) else payload
+    normalized = json.loads(json.dumps(candidate))
+    if not isinstance(normalized, dict):
+        raise ValueError("Bubble get_plugin_conflicts payload must be a JSON object.")
+    app_id = str(
+        normalized.get("appname")
+        or payload.get("appname")
+        or payload.get("app_id")
+        or payload.get("appId")
+        or session.app_id
+        or ""
+    ).strip()
+    if not app_id:
+        raise ValueError("Bubble get_plugin_conflicts payload is missing appname/app_id.")
+    return {"appname": app_id}
+
+
+def normalize_ai_context_change_payload(payload: dict[str, Any], session: BubbleSessionData) -> dict[str, Any]:
+    candidate = payload.get("body") if isinstance(payload.get("body"), dict) else payload
+    normalized = json.loads(json.dumps(candidate))
+    if not isinstance(normalized, dict):
+        raise ValueError("Bubble notify_ai_app_context_change payload must be a JSON object.")
+    app_id = str(
+        normalized.get("appname")
+        or payload.get("appname")
+        or payload.get("app_id")
+        or payload.get("appId")
+        or session.app_id
+        or ""
+    ).strip()
+    if not app_id:
+        raise ValueError("Bubble notify_ai_app_context_change payload is missing appname/app_id.")
+    app_version = str(
+        normalized.get("appVersion")
+        or normalized.get("app_version")
+        or payload.get("app_version")
+        or payload.get("appVersion")
+        or session.app_version
+        or "test"
+    ).strip() or "test"
+    return {
+        "appVersion": app_version,
+        "changedViewIds": normalized.get("changedViewIds") if isinstance(normalized.get("changedViewIds"), list) else [],
+        "globalContextChanged": bool(normalized.get("globalContextChanged", True)),
+        "appname": app_id,
+        "useTestEnv": bool(normalized.get("useTestEnv", app_version == "test")),
+    }
+
+
+def build_editor_write_headers(session: BubbleSessionData, payload: dict[str, Any]) -> dict[str, str]:
+    captured = {str(key).lower(): str(value) for key, value in session.headers.items()}
+    cookie = str(session.cookies or captured.get("cookie") or "").strip()
+    bubble_request_id = f"{int(time.time() * 1000)}x{random.randint(10, 99)}"
+    bubble_fiber_id = f"{int(time.time() * 1000)}x{random.randint(100000000000000000, 999999999999999999)}"
+    appname = str(payload.get("appname") or session.app_id or "").strip()
+
+    headers: dict[str, str] = {
+        "accept": "application/json, text/javascript, */*; q=0.01",
+        "accept-language": captured.get("accept-language") or "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+        "cache-control": captured.get("cache-control") or "no-cache",
+        "content-type": "application/json",
+        "origin": captured.get("origin") or "https://bubble.io",
+        "priority": captured.get("priority") or "u=1, i",
+        "referer": captured.get("referer") or session.url or f"https://bubble.io/page?id={appname}",
+        "sec-fetch-dest": captured.get("sec-fetch-dest") or "empty",
+        "sec-fetch-mode": captured.get("sec-fetch-mode") or "cors",
+        "sec-fetch-site": captured.get("sec-fetch-site") or "same-origin",
+        "user-agent": captured.get("user-agent") or "befree-bubble-mcp",
+        "x-bubble-appname": captured.get("x-bubble-appname") or appname,
+        **({"x-bubble-client-commit-timestamp": captured["x-bubble-client-commit-timestamp"]} if captured.get("x-bubble-client-commit-timestamp") else {}),
+        **({"x-bubble-client-version": captured["x-bubble-client-version"]} if captured.get("x-bubble-client-version") else {}),
+        "x-bubble-fiber-id": captured.get("x-bubble-fiber-id") or bubble_fiber_id,
+        "x-bubble-pl": captured.get("x-bubble-pl") or bubble_request_id,
+        "x-requested-with": captured.get("x-requested-with") or "XMLHttpRequest",
+        "x-bubble-platform": captured.get("x-bubble-platform") or "web",
+        "x-bubble-breaking-revision": captured.get("x-bubble-breaking-revision") or "5",
+        "x-bubble-r": captured.get("x-bubble-r") or session.url or f"https://bubble.io/page?id={appname}",
+        "x-bubble-utm-data": captured.get("x-bubble-utm-data") or "{}",
+    }
+    for key in ("sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform"):
+        if captured.get(key):
+            headers[key] = captured[key]
+    for key in (
+        "authorization",
+        "x-csrf-token",
+        "x-xsrf-token",
+        "x-bubble-csrf-token",
+        "bubble-csrf-token",
+    ):
+        if captured.get(key):
+            headers[key] = captured[key]
+    if cookie:
+        headers["cookie"] = cookie
+    return {key: value for key, value in headers.items() if str(value).strip()}
+
+
+def parse_response_body(body: str) -> Any:
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        return body
+
+
+def has_expected_write_shape(data: Any) -> bool:
+    return isinstance(data, dict) and ("last_change" in data or "id_counter" in data)
+
+
+def has_expected_calculate_derived_shape(data: Any) -> bool:
+    return isinstance(data, dict) and isinstance(data.get("fingerprints"), list)
+
+
+def has_expected_auxiliary_shape(data: Any) -> bool:
+    return isinstance(data, (dict, list))
+
+
+class BubbleEditorClient:
+    """Posts authenticated Bubble editor mutations."""
+
+    def __init__(
+        self,
+        *,
+        transport: HttpTransport = default_http_transport,
+        timeout: float = EDITOR_WRITE_TIMEOUT_SEC,
+    ) -> None:
+        self._transport = transport
+        self._timeout = timeout
+
+    def write(
+        self,
+        payload: dict[str, Any],
+        session: BubbleSessionData,
+        *,
+        dry_run: bool = False,
+        calculate_derived: bool = False,
+    ) -> dict[str, Any]:
+        normalized = normalize_write_payload(payload, session)
+        check_editor_request(EDITOR_WRITE_URL, normalized, session_app_id=session.app_id)
+        headers = build_editor_write_headers(session, normalized)
+        safe_request = {
+            "url": EDITOR_WRITE_URL,
+            "payload": normalized,
+            "headers": redact_sensitive(headers),
+        }
+        if dry_run:
+            result: dict[str, Any] = {"ok": True, "dry_run": True, "request": safe_request}
+            if calculate_derived:
+                result["derived"] = self.calculate_derived(normalized, session, dry_run=True)
+            return result
+
+        body = json.dumps(normalized, separators=(",", ":")).encode("utf-8")
+        response = self._transport(EDITOR_WRITE_URL, body, headers, self._timeout)
+        data = parse_response_body(response.body)
+
+        if response.status in (401, 403):
+            session_status = editor_write_session_status(session)
+            return {
+                "ok": False,
+                "dry_run": False,
+                "status": response.status,
+                "error": f"Bubble blocked the editor write ({response.status}).",
+                "reason": "auth_blocked",
+                "session_write_ready": session_status["write_ready"],
+                "session_diagnostics": session_status,
+                "next_user_action": (
+                    "Recapture the Bubble editor session and keep the editor open until the MCP reports "
+                    "that editor request headers were detected. A session that can download .bubble may still "
+                    "be missing headers required for /appeditor/write."
+                ),
+                "response": data,
+                "request": safe_request,
+            }
+        if isinstance(data, str) and data.lstrip().startswith("<"):
+            raise RuntimeError("Bubble session expired: received HTML instead of JSON.")
+
+        valid_shape = has_expected_write_shape(data)
+        ok = 200 <= response.status < 300 and valid_shape
+        result = {
+            "ok": 200 <= response.status < 300 and valid_shape,
+            "dry_run": False,
+            "status": response.status,
+            "response": data,
+            "valid_shape": valid_shape,
+            "request": safe_request,
+        }
+        if ok and calculate_derived:
+            derived_result = self.calculate_derived(normalized, session, dry_run=False)
+            result["derived"] = derived_result
+            result["ok"] = bool(derived_result.get("ok"))
+        return result
+
+    def calculate_derived(
+        self,
+        payload: dict[str, Any],
+        session: BubbleSessionData,
+        *,
+        dry_run: bool = False,
+        derived: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        normalized = normalize_calculate_derived_payload(payload, session, derived=derived)
+        check_editor_request(EDITOR_CALCULATE_DERIVED_URL, normalized, session_app_id=session.app_id)
+        headers = build_editor_write_headers(session, normalized)
+        safe_request = {
+            "url": EDITOR_CALCULATE_DERIVED_URL,
+            "payload": normalized,
+            "headers": redact_sensitive(headers),
+        }
+        if dry_run:
+            return {"ok": True, "dry_run": True, "request": safe_request}
+
+        body = json.dumps(normalized, separators=(",", ":")).encode("utf-8")
+        response = self._transport(EDITOR_CALCULATE_DERIVED_URL, body, headers, self._timeout)
+        data = parse_response_body(response.body)
+
+        if response.status in (401, 403):
+            session_status = editor_write_session_status(session)
+            return {
+                "ok": False,
+                "dry_run": False,
+                "status": response.status,
+                "error": f"Bubble blocked calculate_derived ({response.status}).",
+                "reason": "auth_blocked",
+                "session_write_ready": session_status["write_ready"],
+                "session_diagnostics": session_status,
+                "next_user_action": (
+                    "Recapture the Bubble editor session and keep the editor open until the MCP reports "
+                    "that editor request headers were detected."
+                ),
+                "response": data,
+                "request": safe_request,
+            }
+        if isinstance(data, str) and data.lstrip().startswith("<"):
+            raise RuntimeError("Bubble session expired: received HTML instead of JSON.")
+
+        valid_shape = has_expected_calculate_derived_shape(data)
+        return {
+            "ok": 200 <= response.status < 300 and valid_shape,
+            "dry_run": False,
+            "status": response.status,
+            "response": data,
+            "valid_shape": valid_shape,
+            "request": safe_request,
+        }
+
+    def post_editor_endpoint(
+        self,
+        url: str,
+        payload: dict[str, Any],
+        session: BubbleSessionData,
+        *,
+        dry_run: bool = False,
+        valid_shape: Callable[[Any], bool] = has_expected_auxiliary_shape,
+    ) -> dict[str, Any]:
+        check_editor_request(url, payload, session_app_id=session.app_id)
+        headers = build_editor_write_headers(session, payload)
+        safe_request = {
+            "url": url,
+            "payload": payload,
+            "headers": redact_sensitive(headers),
+        }
+        if dry_run:
+            return {"ok": True, "dry_run": True, "request": safe_request}
+
+        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        response = self._transport(url, body, headers, self._timeout)
+        data = parse_response_body(response.body)
+
+        if response.status in (401, 403):
+            session_status = editor_write_session_status(session)
+            return {
+                "ok": False,
+                "dry_run": False,
+                "status": response.status,
+                "error": f"Bubble blocked editor endpoint ({response.status}).",
+                "reason": "auth_blocked",
+                "session_write_ready": session_status["write_ready"],
+                "session_diagnostics": session_status,
+                "response": data,
+                "request": safe_request,
+            }
+        if isinstance(data, str) and data.lstrip().startswith("<"):
+            raise RuntimeError("Bubble session expired: received HTML instead of JSON.")
+
+        shape_ok = valid_shape(data)
+        return {
+            "ok": 200 <= response.status < 300 and shape_ok,
+            "dry_run": False,
+            "status": response.status,
+            "response": data,
+            "valid_shape": shape_ok,
+            "request": safe_request,
+        }
+
+    def get_plugin_conflicts(
+        self,
+        payload: dict[str, Any],
+        session: BubbleSessionData,
+        *,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        normalized = normalize_plugin_conflicts_payload(payload, session)
+        return self.post_editor_endpoint(
+            EDITOR_GET_PLUGIN_CONFLICTS_URL,
+            normalized,
+            session,
+            dry_run=dry_run,
+        )
+
+    def notify_ai_app_context_change(
+        self,
+        payload: dict[str, Any],
+        session: BubbleSessionData,
+        *,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        normalized = normalize_ai_context_change_payload(payload, session)
+        return self.post_editor_endpoint(
+            EDITOR_NOTIFY_AI_CONTEXT_CHANGE_URL,
+            normalized,
+            session,
+            dry_run=dry_run,
+        )

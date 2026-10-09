@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, BookOpen, ExternalLink, FolderOpen, Globe, Loader2, Rocket, SearchCheck, Wrench } from 'lucide-react';
+import { ArrowRight, BookOpen, ExternalLink, FolderOpen, Globe, Loader2, PlugZap, Rocket, SearchCheck, Wrench } from 'lucide-react';
 import { Breadcrumbs } from '@/components/breadcrumbs';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -67,7 +67,21 @@ export function ProjectOverview({ project }: { project: ProjectDetail }) {
               <FolderOpen className="size-3" />
               <span className="font-mono">{p.dir.replace(/^\/Users\/[^/]+/, '~')}</span>
             </span>
+            <ConnectionBadge project={p} />
           </div>
+          {p.connection?.latestExport && (
+            <p className="mt-1 text-xs text-zinc-500">
+              {t('project.connection.export')}: <span className="font-mono">{p.connection.latestExport.appVersion ?? '?'}</span>
+              {p.connection.latestExport.fetchedAt ? ` · ${formatDate(p.connection.latestExport.fetchedAt, locale, true)}` : ''}
+              {p.connection.latestExport.sha256 ? (
+                <>
+                  {' · sha256 '}
+                  <span className="font-mono">{p.connection.latestExport.sha256.slice(0, 12)}</span>
+                </>
+              ) : null}
+              {p.connection.exportCount > 1 ? ` · ${t('project.connection.exports', { n: p.connection.exportCount })}` : ''}
+            </p>
+          )}
         </div>
         <div className="text-right text-xs text-zinc-400">
           {t('common.updated')} {formatDate(p.updatedAt, locale, true)}
@@ -147,6 +161,30 @@ export function ProjectOverview({ project }: { project: ProjectDetail }) {
         </Card>
       </div>
     </div>
+  );
+}
+
+/** "connected" when an MCP profile of unbubble:connect is bound to this app (session existence only). */
+function ConnectionBadge({ project }: { project: ProjectDetail }) {
+  const { t, locale } = useLocale();
+  const profiles = project.connection?.profiles ?? [];
+  if (!profiles.length) return null;
+  const withSession = profiles.filter((x) => x.sessionCaptured);
+  const title = profiles
+    .map((x) => `${x.name} · ${x.appVersion ?? 'test'} · ${x.sessionCaptured ? `${t('project.connection.session')} ${x.sessionUpdated ? formatDate(x.sessionUpdated, locale, true) : ''}` : t('project.connection.noSession')}`)
+    .join('\n');
+  return (
+    <Badge
+      variant="secondary"
+      title={title}
+      className={cn(
+        'gap-1',
+        withSession.length ? 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300' : 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
+      )}
+    >
+      <PlugZap className="size-3" />
+      {withSession.length ? t('project.connection.on') : t('project.connection.noSessionShort')}
+    </Badge>
   );
 }
 

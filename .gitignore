@@ -7,3 +7,4 @@ ui/node_modules/
 ui/.next/
 ui/next-env.d.ts
 ui/*.tsbuildinfo
+mcp/.befree-bubble-mcp.tmp-*/

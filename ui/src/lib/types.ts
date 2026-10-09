@@ -92,6 +92,25 @@ export interface AuditRound {
   };
 }
 
+/**
+ * audit/cleanup-applied__<app>.json — deletions applied through the connected mode
+ * (unbubble:connect cleanup_journal.py). An entry counts as deleted in the app only when the
+ * call succeeded and it was applied to `test` itself or to a branch the owner merged.
+ */
+export interface CleanupJournalSummary {
+  path: string;
+  updated?: string;
+  entries: number;
+  /** Count as deleted: applied to test, or on a branch that was merged. */
+  applied: number;
+  /** Applied on a branch that is not merged (yet) — never counted. */
+  pending: number;
+  failed: number;
+  /** Confirmed gone by a later audit round (cleanup_journal.py verify). */
+  verified: number;
+  versions: { appVersion: string; applied: number; pending: number; failed: number; verified: number }[];
+}
+
 export interface AuditStage {
   status: StageStatus;
   derivedStatus: StageStatus;
@@ -99,6 +118,7 @@ export interface AuditStage {
   rounds: AuditRound[];
   latest?: AuditRound;
   progressFile?: AuditProgress;
+  journal?: CleanupJournalSummary;
   sectionsTotal: number;
   /** Sections signed off / sections that still have findings. */
   sectionsResolved: number;
@@ -243,6 +263,8 @@ export interface ProjectDetail extends ProjectSummary {
   levelup: LevelUpStage;
   state: ProjectState;
   files: FileInfo[];
+  /** Connected mode (unbubble:connect): MCP profiles bound to this app and the newest downloaded export. */
+  connection?: ProjectConnection;
 }
 
 // ---------------------------------------------------------------- docs
@@ -271,7 +293,8 @@ export type HostKey =
 export type InstallKind = 'symlink' | 'copy' | 'plugin' | 'source';
 
 export interface SkillPresence {
-  skill: 'audit' | 'clone' | 'level-up';
+  /** `connect` is optional: "complete" means the three core skills. */
+  skill: 'audit' | 'clone' | 'level-up' | 'connect';
   path: string;
   inSync: boolean | null; // null = could not compare
 }
@@ -282,7 +305,7 @@ export interface InstallLocation {
   target?: string; // symlink target
   version?: string; // from .claude-plugin/plugin.json when present
   skills: SkillPresence[];
-  complete: boolean; // all three skills found
+  complete: boolean; // the three core skills found (connect is optional)
   inSync: boolean | null;
 }
 
@@ -306,4 +329,53 @@ export interface SetupInfo {
   home: string;
   hosts: HostInstall[];
   scannedAt: string;
+}
+
+// ---------------------------------------------------------------- connected mode (unbubble:connect)
+
+/** An MCP profile as `mcp/launch.py doctor` reports it — session existence and date only, never content. */
+export interface ConnectedProfile {
+  name: string;
+  appId: string | null;
+  appVersion: string | null;
+  /** A branch profile reuses its app's session. */
+  sessionProfile: string | null;
+  sessionCaptured: boolean;
+  sessionUpdated: string | null;
+  /** Roles with a captured test-user session for logged-in screen captures (names only). */
+  appSessions: string[];
+  rebuildSessions: string[];
+}
+
+/** Provenance sidecar of an export downloaded by fetch_export.py (`<export>.meta.json`). */
+export interface ExportProvenance {
+  file: string;
+  appVersion: string | null;
+  fetchedAt: string | null;
+  sha256: string | null;
+  bytes: number | null;
+}
+
+export interface ConnectedModeInfo {
+  /** mcp/launch.py exists in the repository. */
+  available: boolean;
+  /** Every doctor check passed. */
+  installed: boolean;
+  error?: string;
+  launcher: string;
+  home: string;
+  vendored?: { commit: string; ref: string; files: number };
+  checks: { name: string; ok: boolean; detail: string }[];
+  /** Agent hosts where the MCP server is registered. */
+  hosts: Record<string, boolean>;
+  profiles: ConnectedProfile[];
+  exports: Record<string, { count: number; latest: ExportProvenance }>;
+  /** One browser sign-in shared by every profile; candidates that may already be signed in. */
+  browsers: { shared: boolean; profiles: string[]; importable: string[] };
+}
+
+export interface ProjectConnection {
+  profiles: ConnectedProfile[];
+  latestExport?: ExportProvenance;
+  exportCount: number;
 }

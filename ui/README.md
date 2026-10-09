@@ -5,14 +5,22 @@ shows, per project, how far the three stages are:
 
 | Stage | Derived from |
 |---|---|
-| **Audit** | `audit/<app>-vN_audit.json` (findings per category per round) + the HTML reports (embedded) + `audit/bubble_cleanup_progress__<app>.json` (deletions, per-section sign-offs and items kept on purpose — auto-saved by the embedded report through `PUT /api/projects/<app>/audit-progress`) |
+| **Audit** | `audit/<app>-vN_audit.json` (findings per category per round) + the HTML reports (embedded) + `audit/bubble_cleanup_progress__<app>.json` (deletions, per-section sign-offs and items kept on purpose — auto-saved by the embedded report through `PUT /api/projects/<app>/audit-progress`) + `audit/cleanup-applied__<app>.json` (deletions applied through the connected mode; the entries that count — applied to `test` or on a merged branch — are merged into the tracker by `GET …/audit-progress` and kept out of the progress file on `PUT`) |
 | **Clone · docs** | `inventory/summary.json`, `secrets/ENV-KEYS.md` (+ `.env` existence only), `docs/00…08-*.md`, `PRD-clone.md`, `PARITY-MATRIX.md` (rows with/without disposition), `08-open-questions.md` (blocking / decisions) |
 | **Level-up · docs** | the nine files of `levelup/` + `spec-coverage.json` (gate) + `parity-report.json` |
 | **Level-up · implementation** | stories parsed from `levelup/BACKLOG.md` (same rules as `spec_coverage.py`) ticked off in the UI |
 
 It also detects **where the skills are installed** (Claude Code, Codex/ChatGPT, `~/.agents`,
-Cursor, Gemini, Copilot, OpenCode, Windsurf), whether each copy is in sync with this repo, and
-walks a new user through a 4-step onboarding (`/setup`).
+Cursor, Gemini, Copilot, OpenCode, Windsurf) — the three core skills plus the optional `connect` —,
+whether each copy is in sync with this repo, and walks a new user through a 4-step onboarding
+(`/setup`).
+
+**Connected mode** (optional, `mcp/` + `unbubble:connect`): `/setup` shows its installation from
+`python3 ../mcp/launch.py doctor --json` — vendored commit, checks, hosts where the MCP server is
+registered, Bubble profiles with whether each has a session and when it was saved, test-user roles,
+downloaded exports. A project page shows a "connected" badge when a profile is bound to the app,
+with the provenance of its newest downloaded export. Session files are never read — only whether
+they exist and their date.
 
 ## Run
 
@@ -25,7 +33,8 @@ npm run dev        # http://localhost:3333
 `npm run build && npm start` for a production build. Node 20+.
 
 Optional env vars (see `.env.example`): `UNBUBBLE_PROJECTS_DIR` (default `~/UnBubble-Projects`),
-`UNBUBBLE_REPO_DIR` (default: the parent of `ui/`).
+`UNBUBBLE_REPO_DIR` (default: the parent of `ui/`), `UNBUBBLE_MCP_HOME` (the connected mode's state
+folder, default `~/.unbubble/mcp` — the same variable `mcp/launch.py` reads).
 
 ## Storage model — files are the source of truth
 
@@ -51,8 +60,9 @@ The live secrets file (`secrets/.env`) is never read nor served; `ENV-KEYS.md` a
 ## Layout
 
 ```
-src/lib/scan/      audit.ts · clone.ts · levelup.ts · backlog.ts · project.ts  (derivation)
+src/lib/scan/      audit.ts · clone.ts · levelup.ts · backlog.ts · project.ts · journal.ts  (derivation)
 src/lib/install.ts skill-install detection across agent hosts
+src/lib/connect.ts connected mode: launch.py doctor for /setup, profile + export provenance per project
 src/lib/state.ts   unbubble.json read/patch
 src/app/api/       projects, projects/[id], …/docs, …/file, …/state, setup
 src/components/    ui/ (shadcn base-nova, same kit as BubbleDocs), layout/, project/, docs/, setup/

@@ -1,0 +1,3224 @@
+"""Command line interface for Befree Bubble MCP."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from urllib.parse import urlparse
+from pathlib import Path
+from typing import Any, cast
+
+from bubble_mcp.catalog_quality import catalog_quality_report
+from bubble_mcp.core.config import browser_profile_dir, resolve_browser_profile_dir
+from bubble_mcp.browser_automation import (
+    cancel_scheduled_deploy,
+    deploy_history,
+    list_scheduled_deploys,
+    schedule_deploy,
+)
+from bubble_mcp.compiler.payload import compile_plan_to_write_payloads
+from bubble_mcp.converters.html.converter import html_to_plan
+from bubble_mcp.context.importers import import_context_artifact
+from bubble_mcp.context.detector import (
+    default_bubble_export_path,
+    detect_project_context,
+    hydrate_profile_reusables,
+)
+from bubble_mcp.context.export_inspect import inspect_bubble_export
+from bubble_mcp.context.freshness import context_freshness, load_context_with_overlay
+from bubble_mcp.context.queries import context_find_payload
+from bubble_mcp.context.source import load_context, save_context
+from bubble_mcp.core.redaction import redact_sensitive
+from bubble_mcp.core.config import (
+    BubbleMcpSettings,
+    BubbleProfile,
+    get_config_dir,
+    load_settings,
+    resolve_profile,
+    save_settings,
+    with_profile,
+    without_profile,
+)
+from bubble_mcp.execution.client import BubbleEditorClient, build_editor_write_headers
+from bubble_mcp.execution.editor_api import (
+    confirm_bubble_branch_merge,
+    create_bubble_branch,
+    delete_bubble_branch,
+    describe_bubble_branch_merge_conflicts,
+    finalize_bubble_branch_merge,
+    fetch_jetstream_logs,
+    fetch_changelog_entries,
+    fetch_plan_usage,
+    fetch_storage_usage,
+    fetch_workflow_runs,
+    fetch_workload_usage_breakdown,
+    fetch_workload_usage_by_date,
+    list_branch_contributors,
+    list_bubble_branches,
+    performance_audit,
+    read_time_series,
+    resolve_bubble_branch_merge_conflicts,
+    start_bubble_branch_merge,
+)
+from bubble_mcp.execution.executor import execute_plan
+from bubble_mcp.execution.plugins import install_plugin
+from bubble_mcp.execution.state import next_user_action, operation_snapshot
+from bubble_mcp.execution.structural import validate_structure
+from bubble_mcp.extensions.store import disable_extension, enable_extension, import_extension, list_extensions
+from bubble_mcp.extensions.validator import validate_extension_pack
+from bubble_mcp.extension_companion import ExtensionCompanionConfig, serve_extension_companion
+from bubble_mcp.frameworks import framework_status, generate_framework_artifacts, list_frameworks
+from bubble_mcp.frameworks.program_runner import execute_framework_program
+from bubble_mcp.frameworks.text_planner import plan_framework_text
+from bubble_mcp.frameworks.workspace import sync_artifacts_to_workspace
+from bubble_mcp.language import build_language_index, framework_language_pack, language_query, language_tool_detail
+from bubble_mcp.language.cache import cached_language_index
+from bubble_mcp.harness.expert import export_expert_eval_cases
+from bubble_mcp.harness.eval_runner import run_eval
+from bubble_mcp.harness.visual import compare_visual_snapshot_files
+from bubble_mcp.harness.visual_audit import audit_visual_from_inputs
+from bubble_mcp.harness.app_session import (
+    capture_app_session,
+    ensure_logged_in_capture_allowed,
+    load_http_auth,
+    resolve_app_session,
+    save_http_auth,
+)
+from bubble_mcp.harness.visual_bubble import build_bubble_preview_url, capture_bubble_visual_snapshot
+from bubble_mcp.harness.visual_capture import capture_visual_snapshot
+from bubble_mcp.html_runtime import create_from_html_runtime
+from bubble_mcp.style_import.runtime import create_styles_from_html_runtime
+from bubble_mcp.knowledge.advisor import knowledge_advice
+from bubble_mcp.knowledge.cache import fetch_knowledge_record, import_knowledge_records, knowledge_search
+from bubble_mcp.learning.store import append_learning_record, list_learning_records
+from bubble_mcp.planner.deterministic import plan_message
+from bubble_mcp.profile_status import profile_status
+from bubble_mcp.readiness import run_readiness_check
+from bubble_mcp.runtime_coverage import catalog_coverage_report
+from bubble_mcp.runtime_smoke import run_runtime_smoke
+from bubble_mcp.server.agent_guide import agent_guide, search_tool_catalog, task_recipe, task_runbook
+from bubble_mcp.server.tools import _verify_html_style_import, call_tool
+from bubble_mcp.skills.authoring import (
+    create_skill_authoring_session,
+    generate_skill_from_authoring_session,
+    update_skill_authoring_session,
+)
+from bubble_mcp.skills.runner import run_skill
+from bubble_mcp.skills.store import (
+    disable_skill,
+    enable_skill,
+    export_skill,
+    import_skill,
+    list_skills,
+)
+from bubble_mcp.skills.validator import describe_skill_file, validate_skill_file
+from bubble_mcp.sessions.browser import capture_session_with_playwright
+from bubble_mcp.sessions.constants import DEFAULT_LOGIN_WAIT_SECONDS, MIN_LOGIN_WAIT_SECONDS
+from bubble_mcp.sessions.store import list_sessions, load_session, save_session, session_from_payload
+from bubble_mcp.sessions.store import session_path as session_file_path
+from bubble_mcp.tool_authoring.sessions import (
+    append_capture_to_authoring_session,
+    create_authoring_session,
+    describe_authoring_session,
+    finalize_authoring_session,
+    generate_authoring_extension_pack,
+    set_active_authoring_session,
+)
+from bubble_mcp.transfer.executor import execute_transfer_plan, preview_transfer_plan
+from bubble_mcp.transfer.planner import create_transfer_plan
+from bubble_mcp.transfer.store import load_transfer_plan
+from bubble_mcp.validators.semantic import validate_plan
+
+
+def emit_json(payload: object) -> None:
+    # UnBubble edition: the CLI runs inside agent shells, so its output gets the same redaction as
+    # MCP tool results (settings.secure, cookies, tokens) before it reaches a transcript.
+    print(json.dumps(redact_sensitive(payload), indent=2, sort_keys=True))
+
+
+def positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < MIN_LOGIN_WAIT_SECONDS:
+        raise argparse.ArgumentTypeError(f"must be at least {MIN_LOGIN_WAIT_SECONDS}")
+    return parsed
+
+
+def command_init(args: argparse.Namespace) -> int:
+    config_dir = Path(args.config_dir).expanduser() if args.config_dir else get_config_dir()
+    settings = BubbleMcpSettings(config_dir=config_dir, default_profile=None, profiles={})
+    if not (config_dir / "settings.json").exists():
+        save_settings(settings)
+    emit_json({"ok": True, "config_dir": str(config_dir), "settings": str(config_dir / "settings.json")})
+    return 0
+
+
+def command_profile_add(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    profile = BubbleProfile(
+        name=args.name,
+        app_id=args.app_id,
+        appname=args.appname or args.app_id,
+        editor_url=args.editor_url,
+        app_version=args.app_version or None,
+        app_json_path=args.app_json_path or None,
+        consolelog_json_path=args.consolelog_json_path or None,
+        session_profile=args.session_profile or None,
+        browser_profile=args.browser_profile or None,
+    )
+    if profile.browser_profile:
+        browser_profile_dir(profile.browser_profile)  # plain identifier only
+    save_settings(with_profile(settings, profile))
+    emit_json({"ok": True, "profile": profile.name, "app_id": profile.app_id})
+    return 0
+
+
+def command_profile_remove(args: argparse.Namespace) -> int:
+    """UnBubble edition: drop a profile (e.g. the one of a branch that was deleted). Its session file,
+    if any, stays on disk and is reported — sessions are removed by the user."""
+
+    settings = load_settings()
+    name = str(args.name or "").strip()
+    if name not in settings.profiles:
+        emit_json({"ok": False, "error": f"Profile '{name}' does not exist."})
+        return 1
+    dependents = sorted(other for other, entry in settings.profiles.items() if entry.session_profile == name)
+    if dependents and not args.force:
+        emit_json({"ok": False, "error": f"Profiles {dependents} reuse the session of '{name}'; remove them first or pass --force."})
+        return 1
+    save_settings(without_profile(settings, name))
+    session_file = session_file_path(name)
+    emit_json({
+        "ok": True,
+        "removed": name,
+        "session_file_kept": session_file.exists(),
+        "hint": f"Delete {session_file} yourself if this profile's session is no longer needed." if session_file.exists() else None,
+    })
+    return 0
+
+
+def command_profile_list(_args: argparse.Namespace) -> int:
+    settings = load_settings()
+    emit_json(
+        {
+            "ok": True,
+            "default_profile": settings.default_profile,
+            "profiles": [
+                {
+                    "name": profile.name,
+                    "app_id": profile.app_id,
+                    "appname": profile.appname,
+                    "editor_url": profile.editor_url,
+                    "app_version": profile.app_version,
+                    "app_json_path": profile.app_json_path,
+                    "consolelog_json_path": profile.consolelog_json_path,
+                }
+                for profile in settings.profiles.values()
+            ],
+        }
+    )
+    return 0
+
+
+def command_profile_status(args: argparse.Namespace) -> int:
+    status = profile_status(args.profile or "", max_age_hours=args.max_age_hours)
+    emit_json(status)
+    return 0 if status.get("ok") else 1
+
+
+def command_profile_refresh_cache(args: argparse.Namespace) -> int:
+    from bubble_mcp.server.tools import call_tool
+
+    result = call_tool(
+        "bubble_profile_cache_refresh",
+        {
+            "profile": args.profile,
+            "app_id": args.app_id,
+            "app_version": args.app_version,
+            "output": args.output,
+            "bubble_file": args.bubble_file,
+            "consolelog_file": args.consolelog_file,
+            "force": not args.no_force,
+            "skip_id_to_path": args.skip_id_to_path,
+            "max_age_hours": args.max_age_hours,
+        },
+    )
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_profile_bootstrap(args: argparse.Namespace) -> int:
+    from bubble_mcp.server.tools import call_tool
+
+    result = call_tool(
+        "bubble_project_bootstrap",
+        {
+            "profile": args.profile,
+            "app_id": args.app_id,
+            "appname": args.appname,
+            "editor_url": args.editor_url,
+            "app_version": args.app_version,
+            "app_json_path": args.app_json_path,
+            "consolelog_json_path": args.consolelog_json_path,
+            "detect_context": args.detect_context,
+            "force_context": args.force_context,
+            "max_age_hours": args.max_age_hours,
+        },
+    )
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_transfer_inventory(args: argparse.Namespace) -> int:
+    result = call_tool(
+        "bubble_transfer_inventory",
+        {
+            "source_profile": args.source_profile,
+            "source_type": args.source_type,
+            "source_ref": args.source_ref,
+            "source_context": args.source_context,
+            "include_raw": args.include_raw,
+        },
+    )
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_transfer_plan(args: argparse.Namespace) -> int:
+    result = create_transfer_plan(
+        source_profile=args.source_profile,
+        target_profile=args.target_profile,
+        source_type=args.source_type,
+        source_ref=args.source_ref,
+        source_context=args.source_context or None,
+        target_context=args.target_context or None,
+        target_parent=args.target_parent,
+        target_name=args.target_name or None,
+        conflict_policy=args.conflict_policy,
+        asset_policy=args.asset_policy,
+        dependency_policy=args.dependency_policy,
+        reuse_policy=args.reuse_policy,
+        collection_policy=args.collection_policy,
+        api_connector_policy=args.api_connector_policy,
+        data_records_policy=args.data_records_policy,
+    )
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_transfer_preview(args: argparse.Namespace) -> int:
+    result = preview_transfer_plan(args.transfer_id, include_payloads=args.include_payloads)
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_transfer_execute(args: argparse.Namespace) -> int:
+    result = execute_transfer_plan(
+        args.transfer_id,
+        execute=args.execute,
+        confirm=args.confirm,
+        max_steps=args.max_steps,
+    )
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_transfer_status(args: argparse.Namespace) -> int:
+    emit_json({"ok": True, "transfer": load_transfer_plan(args.transfer_id)})
+    return 0
+
+
+def command_browser_schedule_deploy(args: argparse.Namespace) -> int:
+    result = schedule_deploy(
+        profile=args.profile,
+        scheduled_at=args.scheduled_at,
+        message=args.message,
+        execute=args.execute,
+        confirm=args.confirm,
+        preview_id=args.preview_id or None,
+        retry_count=args.retry_count,
+        headless=args.headless,
+        wait_seconds=args.wait_seconds,
+        auto_fix_objective_issues=args.auto_fix_objective_issues,
+    )
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_browser_list_deploys(args: argparse.Namespace) -> int:
+    result = list_scheduled_deploys(profile=args.profile)
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_browser_cancel_deploy(args: argparse.Namespace) -> int:
+    result = cancel_scheduled_deploy(profile=args.profile, deploy_id=args.deploy_id)
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_browser_deploy_history(args: argparse.Namespace) -> int:
+    result = deploy_history(
+        profile=args.profile,
+        limit=args.limit,
+        include_cancelled=not args.exclude_cancelled,
+    )
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_context_summary(args: argparse.Namespace) -> int:
+    context = load_context(Path(args.file))
+    emit_json({"ok": True, "summary": context.summary(), "freshness": context_freshness(context, path=Path(args.file))})
+    return 0
+
+
+def command_context_find(args: argparse.Namespace) -> int:
+    profile_name = str(args.profile or "").strip()
+    if args.file:
+        context = load_context(Path(args.file))
+    else:
+        settings = load_settings()
+        profile = resolve_profile(settings, profile_name or None)
+        if profile is None:
+            emit_json(
+                {
+                    "ok": False,
+                    "error": "profile_required",
+                    "message": "Provide --file or a configured --profile to search project context.",
+                }
+            )
+            return 1
+        status = profile_status(profile.name)
+        raw_context_status = status.get("context")
+        context_status = raw_context_status if isinstance(raw_context_status, dict) else {}
+        context_path = str(context_status.get("path") or "").strip()
+        if not context_path or not Path(context_path).exists():
+            emit_json(
+                {
+                    "ok": False,
+                    "error": "context_missing",
+                    "profile": profile.name,
+                    "next_actions": status.get("next_actions", []),
+                }
+            )
+            return 1
+        context = load_context_with_overlay(Path(context_path), profile=profile.name, app_id=profile.app_id)
+    emit_json(
+        {
+            "ok": True,
+            **({"profile": profile_name} if profile_name and args.file else {}),
+            **context_find_payload(
+                context,
+                args.query,
+                args.limit,
+                exact=args.exact,
+                include_metadata=args.include_metadata,
+            ),
+        }
+    )
+    return 0
+
+
+def command_context_import(args: argparse.Namespace) -> int:
+    context = import_context_artifact(Path(args.file), kind=args.kind)
+    if args.output:
+        save_context(context, Path(args.output))
+    emit_json({"ok": True, "summary": context.summary(), "output": args.output or None})
+    return 0
+
+
+def command_context_detect(args: argparse.Namespace) -> int:
+    result = detect_project_context(
+        profile=args.profile,
+        app_id=args.app_id or None,
+        app_version=args.app_version,
+        force=args.force,
+        output=Path(args.output) if args.output else None,
+        bubble_file=Path(args.bubble_file) if args.bubble_file else None,
+        consolelog_file=Path(args.consolelog_file) if args.consolelog_file else None,
+        include_id_to_path=not args.skip_id_to_path,
+    )
+    emit_json(result.to_dict())
+    return 0
+
+
+def command_context_hydrate_reusables(args: argparse.Namespace) -> int:
+    ids = [item.strip() for item in str(args.ids or "").split(",") if item.strip()]
+    report = hydrate_profile_reusables(
+        profile=args.profile,
+        app_id=args.app_id or None,
+        app_version=args.app_version,
+        ids=ids or None,
+        batch_size=args.batch_size,
+        bubble_file=Path(args.file) if args.file else None,
+    )
+    emit_json({"ok": not report.get("failed"), **report})
+    return 0 if not report.get("failed") else 1
+
+
+def command_context_inspect_bubble(args: argparse.Namespace) -> int:
+    explicit = str(args.file or "").strip()
+    if explicit:
+        target = Path(explicit).expanduser()
+    else:
+        profile_name = str(args.profile or "").strip()
+        if not profile_name:
+            raise ValueError("context inspect-bubble requires --file or --profile.")
+        settings = load_settings()
+        configured = resolve_profile(settings, profile_name)
+        app_id = str(args.app_id or (configured.app_id if configured else "")).strip()
+        if not app_id:
+            raise ValueError("context inspect-bubble requires --app-id or a profile with app_id.")
+        target = default_bubble_export_path(configured.name if configured else profile_name, app_id)
+    if not target.exists():
+        emit_json({"ok": False, "error": "bubble_export_not_found", "file": str(target)})
+        return 1
+    report = inspect_bubble_export(target, sample_limit=max(int(args.sample_limit or 20), 0))
+    emit_json({"ok": True, **report})
+    return 0
+
+
+def command_plan(args: argparse.Namespace) -> int:
+    plan = plan_message(args.message, context=args.context, parent=args.parent)
+    payload = plan.to_dict()
+    structural_validation = validate_structure(payload)
+    emit_json(
+        {
+            "ok": True,
+            "plan": payload,
+            "validation": validate_plan(payload),
+            "structural_validation": structural_validation,
+            "next_user_action": next_user_action(structural_validation),
+            "operation_snapshot": operation_snapshot(
+                plan=payload,
+                validation=structural_validation,
+                execute=False,
+                phase="planned",
+            ),
+        }
+    )
+    return 0
+
+
+def command_validate_plan(args: argparse.Namespace) -> int:
+    payload = json.loads(Path(args.file).read_text(encoding="utf-8"))
+    structural_validation = validate_structure(payload, execute=args.execute)
+    emit_json(
+        {
+            "ok": True,
+            "validation": validate_plan(payload),
+            "structural_validation": structural_validation,
+            "next_user_action": next_user_action(structural_validation, execute=args.execute),
+        }
+    )
+    return 0
+
+
+def command_import_html(args: argparse.Namespace) -> int:
+    html_source = str(getattr(args, "url", "") or args.file or "").strip()
+    use_runtime = bool(args.runtime or getattr(args, "url", ""))
+    if use_runtime:
+        result = create_from_html_runtime(
+            profile=args.profile,
+            context=args.context,
+            parent=args.parent,
+            html_file=html_source,
+            app_id=args.app_id or None,
+            app_version=args.app_version,
+            execute=args.execute,
+            selector=args.selector or None,
+            placement=args.placement or None,
+            translate_to_existing_styles=args.translate_to_existing_styles,
+            style_match_threshold=args.style_match_threshold,
+            rendered_html=args.rendered_html,
+            strict_validate=args.strict_validate,
+            validation_out_dir=args.validation_out_dir or None,
+            refresh_context=args.refresh_context,
+        )
+        emit_json(result)
+        return 0 if result.get("ok") else 1
+
+    if not args.file:
+        raise ValueError("Non-runtime HTML import requires --file.")
+    html = Path(args.file).read_text(encoding="utf-8")
+    plan = html_to_plan(html, context=args.context, parent=args.parent)
+    payload = plan.to_dict()
+    if args.compile:
+        if not args.app_id:
+            raise ValueError("HTML import compilation requires --app-id.")
+        payload = compile_plan_to_write_payloads(payload, app_id=args.app_id, app_version=args.app_version)
+    emit_json({"ok": True, "plan": payload, "validation": validate_plan(payload)})
+    return 0
+
+
+def command_import_html_styles(args: argparse.Namespace) -> int:
+    result = create_styles_from_html_runtime(
+        profile=args.profile,
+        selector=args.selector or None,
+        style_name=args.style_name or None,
+        element_type=args.element_type,
+        html_file=args.file or None,
+        html=args.html or None,
+        url=args.url or None,
+        rendered_html=args.rendered_html,
+        execute=args.execute,
+        include_states=args.include_states,
+        states=[state.strip() for state in args.states.split(",") if state.strip()] if args.states else None,
+        extra_css=[args.extra_css] if args.extra_css else None,
+        executor=lambda tool, tool_args: call_tool(tool, tool_args),
+        verifier=lambda candidate: _verify_html_style_import(args.profile, candidate),
+    )
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_eval_run(args: argparse.Namespace) -> int:
+    report = run_eval(
+        Path(args.dataset),
+        app_id=args.app_id or None,
+        compile_plans=args.compile,
+        case_filter=args.filter or None,
+        failed_from=Path(args.failed_from) if args.failed_from else None,
+        offset=args.offset,
+        limit=args.limit if args.limit > 0 else None,
+    )
+    if args.report:
+        report_path = Path(args.report)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    emit_json({"ok": True, "report": report})
+    return 0
+
+
+def command_eval_export_expert(args: argparse.Namespace) -> int:
+    result = export_expert_eval_cases(
+        Path(args.input),
+        Path(args.output),
+        limit=args.limit,
+    )
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_eval_visual(args: argparse.Namespace) -> int:
+    result = compare_visual_snapshot_files(
+        Path(args.reference),
+        Path(args.actual),
+        tolerance_px=args.tolerance_px,
+        tolerance_ratio=args.tolerance_ratio,
+        require_text=not args.no_require_text,
+        require_images=args.require_images,
+    )
+    if args.report:
+        report_path = Path(args.report)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_eval_visual_audit(args: argparse.Namespace) -> int:
+    arguments = {
+        "reference": args.reference,
+        "actual": args.actual,
+        "reference_source": args.reference_source,
+        "actual_source": args.actual_source,
+        "actual_profile": args.actual_profile,
+        "actual_app_id": args.actual_app_id,
+        "actual_app_version": args.actual_app_version,
+        "actual_page": args.actual_page,
+        "actual_url": args.actual_url,
+        "actual_public_base_url": args.actual_public_base_url,
+        "selector": args.selector,
+        "reference_selector": args.reference_selector,
+        "actual_selector": args.actual_selector,
+        "profile": args.profile,
+        "context": args.context,
+        "parent": args.parent,
+        "app_id": args.app_id,
+        "app_version": args.app_version,
+        "execute": args.execute,
+        "tolerance_px": args.tolerance_px,
+        "tolerance_ratio": args.tolerance_ratio,
+        "require_text": not args.no_require_text,
+        "require_images": args.require_images,
+        "reference_screenshot": args.reference_screenshot,
+        "actual_screenshot": args.actual_screenshot,
+        "screenshot_task": args.screenshot_task,
+        "rendered_html": args.rendered_html,
+        "viewport_width": args.viewport_width,
+        "viewport_height": args.viewport_height,
+        "wait_ms": args.wait_ms,
+        "selector_timeout_ms": args.selector_timeout_ms,
+        "max_nodes": args.max_nodes,
+        "allow_raw_fallback": args.allow_raw_fallback,
+    }
+    result = audit_visual_from_inputs(arguments)
+    if args.report:
+        report_path = Path(args.report)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if args.output_plan:
+        plan_path = Path(args.output_plan)
+        plan_path.parent.mkdir(parents=True, exist_ok=True)
+        plan = result.get("repair_plan", {}).get("plan") if isinstance(result.get("repair_plan"), dict) else {}
+        plan_path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_eval_capture_visual(args: argparse.Namespace) -> int:
+    storage_state = None
+    if args.app_session_app or args.role:
+        if not (args.app_session_app and args.role):
+            raise SystemExit("capture-visual needs --app-session-app and --role together.")
+        session_path, session_meta = resolve_app_session(args.app_session_app, args.role)
+        ensure_logged_in_capture_allowed(str(args.source), bubble=session_meta.get("target") != "rebuild")
+        storage_state = str(session_path)
+    result = capture_visual_snapshot(
+        str(args.source),
+        selector=args.selector or "",
+        rendered_html=args.rendered_html,
+        viewport_width=args.viewport_width,
+        viewport_height=args.viewport_height,
+        wait_ms=args.wait_ms,
+        selector_timeout_ms=args.selector_timeout_ms,
+        max_nodes=args.max_nodes,
+        allow_raw_fallback=args.allow_raw_fallback,
+        output=Path(args.output) if args.output else None,
+        storage_state=storage_state,
+        screenshot=Path(args.screenshot) if args.screenshot else None,
+        http_credentials=load_http_auth(args.http_auth_app or args.app_session_app)
+        if (args.http_auth_app or args.app_session_app)
+        else None,
+    )
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_eval_save_http_auth(args: argparse.Namespace) -> int:
+    """UnBubble edition: store the HTTP Basic credentials of an app's password-protected test version.
+    The user types them here (no echo for the password); an agent shell has no terminal and is refused."""
+
+    if not sys.stdin.isatty():
+        emit_json({"ok": False, "error": "Run this yourself in a terminal: it asks for the test version's "
+                   "username and password (they never pass through an agent)."})
+        return 2
+    url = args.url or ""
+    if not url:
+        if not args.app_id:
+            raise SystemExit("save-http-auth needs --url, or --app-id (+ --app-version) for a Bubble app.")
+        url = build_bubble_preview_url(app_id=args.app_id, app_version=args.app_version, page="index",
+                                       public_base_url=args.public_base_url or "")
+    app = args.app or args.app_id or ""
+    if not app:
+        raise SystemExit("save-http-auth needs --app (the name captures use) or --app-id.")
+    origin, challenge = _http_auth_challenge(url)
+    if not challenge:
+        print(f"[save-http-auth] {origin} did not ask for a password; saving anyway.", file=sys.stderr)
+    import getpass
+
+    username = input(f"Username for {origin}: ").strip()
+    password = getpass.getpass(f"Password for {origin} (not shown): ")
+    path = save_http_auth(app, username, password, origin=origin)
+    emit_json({"ok": True, "app": app, "origin": origin, "password_requested": challenge, "saved": str(path)})
+    return 0
+
+
+def _http_auth_challenge(url: str) -> tuple[str, bool]:
+    """Follow redirects to the page that answers and tell whether it asks for HTTP Basic auth."""
+
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(url, method="GET", headers={"User-Agent": "bubble-mcp save-http-auth"})
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310 - the user's own app URL
+            final = response.geturl()
+            challenge = False
+    except urllib.error.HTTPError as exc:
+        final = exc.geturl() or url
+        challenge = exc.code == 401 and "basic" in str(exc.headers.get("WWW-Authenticate", "")).lower()
+    parsed = urlparse(final)
+    return f"{parsed.scheme}://{parsed.netloc}", challenge
+
+
+def command_eval_capture_app_session(args: argparse.Namespace) -> int:
+    url = args.url or ""
+    app = args.app or args.app_id or ""
+    if not url:
+        if not args.app_id:
+            raise SystemExit("capture-app-session needs --url, or --app-id (+ --app-version/--page) for a Bubble app.")
+        url = build_bubble_preview_url(app_id=args.app_id, app_version=args.app_version, page=args.page,
+                                       public_base_url=args.public_base_url or "")
+    if not app:
+        raise SystemExit("capture-app-session needs --app (the name the session is stored under).")
+    result = capture_app_session(url=url, app=app, role=args.role, target=args.target)
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_eval_capture_bubble_visual(args: argparse.Namespace) -> int:
+    query = _load_optional_json_object(args.query) if args.query else {}
+    result = capture_bubble_visual_snapshot(
+        profile=args.profile or "",
+        app_id=args.app_id or "",
+        app_version=args.app_version or "test",
+        page=args.page or "index",
+        selector=args.selector or "",
+        public_base_url=args.public_base_url or "",
+        url=args.url or "",
+        query={str(key): str(value) for key, value in query.items()},
+        viewport_width=args.viewport_width,
+        viewport_height=args.viewport_height,
+        wait_ms=args.wait_ms,
+        selector_timeout_ms=args.selector_timeout_ms,
+        max_nodes=args.max_nodes,
+        output=Path(args.output) if args.output else None,
+        role=args.role or "",
+        screenshot=Path(args.screenshot) if args.screenshot else None,
+    )
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_session_import(args: argparse.Namespace) -> int:
+    payload = json.loads(Path(args.file).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("Session import file must contain a JSON object.")
+    session = session_from_payload(payload, default_app_id=args.app_id or None)
+    target = save_session(args.profile, session)
+    emit_json({"ok": True, "profile": args.profile, "path": str(target), "session": session.to_dict(redact=True)})
+    return 0
+
+
+def command_session_list(_args: argparse.Namespace) -> int:
+    emit_json({"ok": True, "sessions": list_sessions()})
+    return 0
+
+
+def command_session_inspect(args: argparse.Namespace) -> int:
+    session = load_session(args.profile)
+    if session is None:
+        raise ValueError(f"No Bubble session stored for profile '{args.profile}'.")
+    app_id = args.app_id or session.app_id
+    sample_payload: dict[str, object] = {
+        "appname": app_id,
+        "app_version": session.app_version or "test",
+        "changes": [],
+    }
+    write_headers = build_editor_write_headers(session, sample_payload)
+    emit_json(
+        {
+            "ok": True,
+            "profile": args.profile,
+            "session": session.to_dict(redact=True),
+            "stored_header_keys": sorted(session.headers.keys()),
+            "cookie_present": bool(session.cookies),
+            "cookie_length": len(session.cookies or ""),
+            "computed_write_header_keys": sorted(write_headers.keys()),
+            "computed_write_headers": redact_sensitive(write_headers),
+        }
+    )
+    return 0
+
+
+def command_write(args: argparse.Namespace) -> int:
+    session = load_session(args.profile)
+    if session is None:
+        raise ValueError(f"No Bubble session stored for profile '{args.profile}'.")
+    payload = json.loads(Path(args.payload).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("Write payload file must contain a JSON object.")
+    result = BubbleEditorClient().write(payload, session, dry_run=not args.execute)
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def _json_scalar(value: str | None, fallback: object) -> object:
+    if value is None:
+        return fallback
+    raw = str(value)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+
+
+def command_plugin_install(args: argparse.Namespace) -> int:
+    session = load_session(args.profile)
+    if session is None:
+        raise ValueError(f"No Bubble session stored for profile '{args.profile}'.")
+    result = install_plugin(
+        profile=args.profile,
+        session=session,
+        plugin_key=args.plugin_key,
+        app_id=args.app_id or None,
+        app_version=args.app_version or None,
+        plugin_value=_json_scalar(args.plugin_value, True),
+        installed_version=_json_scalar(args.installed_version, 1),
+        installed_version_key=args.installed_version_key or None,
+        include_installed_version=False if args.no_installed_version else None,
+        id_counter=args.id_counter,
+        execute=args.execute,
+        post_check_conflicts=not args.no_post_check_conflicts,
+        calculate_derived=not args.no_calculate_derived,
+        notify_ai_context_change=not args.no_notify_ai_context_change,
+    )
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_execute_plan(args: argparse.Namespace) -> int:
+    plan = json.loads(Path(args.file).read_text(encoding="utf-8"))
+    if not isinstance(plan, dict):
+        raise ValueError("Plan file must contain a JSON object.")
+    context = (
+        load_context_with_overlay(Path(args.context_file), profile=args.profile, app_id=args.app_id or None)
+        if args.context_file
+        else None
+    )
+    result = execute_plan(
+        plan,
+        profile=args.profile,
+        execute=args.execute,
+        app_id=args.app_id or None,
+        app_version=args.app_version,
+        context=context,
+        compile_missing=args.compile,
+        auto_context=not args.no_auto_context,
+    )
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_compile_plan(args: argparse.Namespace) -> int:
+    plan = json.loads(Path(args.file).read_text(encoding="utf-8"))
+    if not isinstance(plan, dict):
+        raise ValueError("Plan file must contain a JSON object.")
+    context = (
+        load_context_with_overlay(Path(args.context_file), app_id=args.app_id or None)
+        if args.context_file
+        else None
+    )
+    compiled = compile_plan_to_write_payloads(
+        plan,
+        app_id=args.app_id,
+        app_version=args.app_version,
+        context=context,
+    )
+    if args.output:
+        Path(args.output).write_text(json.dumps(compiled, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    emit_json({"ok": True, "plan": compiled})
+    return 0
+
+
+def command_session_login(args: argparse.Namespace) -> int:
+    browser_profile_dir = resolve_browser_profile_dir(args.profile)
+    settings = load_settings()
+    configured_profile = settings.profiles.get(args.profile)
+    app_version = args.app_version or (configured_profile.app_version if configured_profile else None)
+
+    def emit_progress(message: str) -> None:
+        print(f"[bubble-mcp session] {message}", file=sys.stderr, flush=True)
+
+    session = capture_session_with_playwright(
+        app_id=args.app_id,
+        editor_url=args.editor_url or None,
+        headless=args.headless,
+        wait_seconds=args.wait_seconds,
+        user_data_dir=browser_profile_dir,
+        app_version=app_version or "test",
+        progress=None if args.quiet else emit_progress,
+    )
+    target = save_session(args.profile, session)
+    if not args.quiet:
+        emit_progress(f"Session saved for profile '{args.profile}' at {target}.")
+    emit_json({"ok": True, "profile": args.profile, "path": str(target), "session": session.to_dict(redact=True)})
+    return 0
+
+
+def _load_optional_json_object(value: str) -> dict[str, object]:
+    if not value:
+        return {}
+    path = Path(value).expanduser()
+    raw = path.read_text(encoding="utf-8") if path.exists() else value
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError("Expected a JSON object.")
+    return payload
+
+
+def _cli_changelog_filters(args: argparse.Namespace) -> dict[str, object]:
+    filters: dict[str, object] = _load_optional_json_object(args.filters)
+    for attr, key in (
+        ("start_timestamp", "start_timestamp"),
+        ("end_timestamp", "end_timestamp"),
+        ("change_type", "type"),
+        ("root", "root"),
+        ("change_identifier", "change_identifier"),
+        ("change_path", "change_path"),
+    ):
+        value = getattr(args, attr, None)
+        if value not in (None, ""):
+            filters[key] = value
+    if args.user_id:
+        filters["user_id"] = args.user_id
+    return filters
+
+
+def command_branch_list(args: argparse.Namespace) -> int:
+    emit_json(list_bubble_branches(profile=args.profile, app_id=args.app_id or None))
+    return 0
+
+
+def command_branch_contributors(args: argparse.Namespace) -> int:
+    emit_json(
+        list_branch_contributors(
+            profile=args.profile,
+            app_id=args.app_id or None,
+            app_version=args.app_version or None,
+        )
+    )
+    return 0
+
+
+def command_branch_create(args: argparse.Namespace) -> int:
+    emit_json(
+        create_bubble_branch(
+            profile=args.profile,
+            app_id=args.app_id or None,
+            name=args.name,
+            from_app_version=args.from_app_version or None,
+            description=args.description or "",
+            execute=args.execute,
+            version_control_api_version=args.version_control_api_version,
+        )
+    )
+    return 0
+
+
+def command_branch_delete(args: argparse.Namespace) -> int:
+    emit_json(
+        delete_bubble_branch(
+            profile=args.profile,
+            app_id=args.app_id or None,
+            app_version=args.app_version,
+            soft_delete=not args.hard_delete,
+            execute=args.execute,
+            confirm=args.confirm,
+        )
+    )
+    return 0
+
+
+def command_branch_merge_start(args: argparse.Namespace) -> int:
+    emit_json(
+        start_bubble_branch_merge(
+            profile=args.profile,
+            app_id=args.app_id or None,
+            ours_version_id=args.ours_version_id,
+            theirs_version_id=args.theirs_version_id,
+            savepoint_message=args.savepoint_message,
+            session_id=args.session_id or None,
+            execute=args.execute,
+        )
+    )
+    return 0
+
+
+def command_branch_merge_confirm(args: argparse.Namespace) -> int:
+    emit_json(
+        confirm_bubble_branch_merge(
+            profile=args.profile,
+            app_id=args.app_id or None,
+            merge_app_version=args.merge_app_version,
+            conflicts_resolved=args.conflicts_resolved,
+            session_id=args.session_id or None,
+            execute=args.execute,
+        )
+    )
+    return 0
+
+
+def command_branch_merge_conflicts_describe(args: argparse.Namespace) -> int:
+    payload = json.loads(Path(args.file).expanduser().read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("branch merge-conflicts-describe requires a JSON object file.")
+    emit_json(describe_bubble_branch_merge_conflicts(payload=payload))
+    return 0
+
+
+def command_branch_merge_resolve_conflicts(args: argparse.Namespace) -> int:
+    changelog_data: list[dict[str, Any]] | None = None
+    if args.changelog_data:
+        raw_changelog_data = _load_optional_json_object(args.changelog_data).get("changelog_data")
+        if not isinstance(raw_changelog_data, list) or not all(
+            isinstance(item, dict) for item in raw_changelog_data
+        ):
+            raise ValueError("branch merge-resolve-conflicts requires changelog_data to be an array of objects.")
+        changelog_data = cast(list[dict[str, Any]], raw_changelog_data)
+    emit_json(
+        resolve_bubble_branch_merge_conflicts(
+            profile=args.profile,
+            app_id=args.app_id or None,
+            merge_app_version=args.merge_app_version,
+            changelog_data=changelog_data,
+            session_id=args.session_id or None,
+            execute=args.execute,
+        )
+    )
+    return 0
+
+
+def command_branch_merge_finalize(args: argparse.Namespace) -> int:
+    emit_json(
+        finalize_bubble_branch_merge(
+            profile=args.profile,
+            app_id=args.app_id or None,
+            merge_app_version=args.merge_app_version,
+            target_version_id=args.target_version_id,
+            source_version_id=args.source_version_id,
+            source_branch_name=args.source_branch_name,
+            user_id=args.user_id or None,
+            savepoint_message=args.savepoint_message or None,
+            version_control_api_version=args.version_control_api_version,
+            execute=args.execute,
+        )
+    )
+    return 0
+
+
+def command_changelog_fetch(args: argparse.Namespace) -> int:
+    emit_json(
+        fetch_changelog_entries(
+            profile=args.profile,
+            app_id=args.app_id or None,
+            app_version=args.app_version or None,
+            start_index=args.start_index,
+            num_fetch=args.num_fetch,
+            filters=_cli_changelog_filters(args),
+        )
+    )
+    return 0
+
+
+def command_metrics_audit(args: argparse.Namespace) -> int:
+    emit_json(
+        performance_audit(
+            profile=args.profile,
+            app_id=args.app_id or None,
+            app_version=args.app_version or None,
+            start=args.start or None,
+            end=args.end or None,
+            granularity=args.granularity,
+            platform=args.platform,
+            include_logs=not args.no_logs,
+            include_raw=args.include_raw,
+        )
+    )
+    return 0
+
+
+def command_metrics_workload_by_date(args: argparse.Namespace) -> int:
+    emit_json(
+        fetch_workload_usage_by_date(
+            profile=args.profile,
+            app_id=args.app_id or None,
+            start=args.start,
+            end=args.end,
+            granularity=args.granularity,
+            include_raw=args.include_raw,
+        )
+    )
+    return 0
+
+
+def command_metrics_workload_breakdown(args: argparse.Namespace) -> int:
+    emit_json(
+        fetch_workload_usage_breakdown(
+            profile=args.profile,
+            app_id=args.app_id or None,
+            start=args.start,
+            end=args.end,
+            granularity=args.granularity,
+            tag1=args.tag1 or None,
+            tag2=args.tag2 or None,
+            platform=args.platform,
+            limit=args.limit,
+            include_raw=args.include_raw,
+        )
+    )
+    return 0
+
+
+def command_metrics_logs(args: argparse.Namespace) -> int:
+    messages = [item.strip() for item in args.message if item.strip()] if args.message else None
+    emit_json(
+        fetch_jetstream_logs(
+            profile=args.profile,
+            app_id=args.app_id or None,
+            app_version=args.app_version or None,
+            start=args.start,
+            end=args.end,
+            messages=messages,
+            contains=args.contains or None,
+            ascending=not args.descending,
+            is_state_ar=not args.no_state_ar,
+            paginate=args.paginate,
+            max_pages=args.max_pages,
+            limit=args.limit,
+            include_raw=args.include_raw,
+        )
+    )
+    return 0
+
+
+def command_metrics_plan_usage(args: argparse.Namespace) -> int:
+    emit_json(fetch_plan_usage(profile=args.profile, app_id=args.app_id or None, include_raw=args.include_raw))
+    return 0
+
+
+def command_metrics_workflow_runs(args: argparse.Namespace) -> int:
+    emit_json(
+        fetch_workflow_runs(
+            profile=args.profile,
+            app_id=args.app_id or None,
+            platform=args.platform,
+            include_raw=args.include_raw,
+        )
+    )
+    return 0
+
+
+def command_metrics_storage(args: argparse.Namespace) -> int:
+    emit_json(
+        fetch_storage_usage(
+            profile=args.profile,
+            app_id=args.app_id or None,
+            refresh=not args.no_refresh,
+            include_raw=args.include_raw,
+        )
+    )
+    return 0
+
+
+def command_metrics_time_series(args: argparse.Namespace) -> int:
+    emit_json(
+        read_time_series(
+            profile=args.profile,
+            app_id=args.app_id or None,
+            start=args.start,
+            end=args.end,
+            metric=args.metric,
+            resolution=args.resolution,
+            use_observe=not args.no_observe,
+            include_raw=args.include_raw,
+        )
+    )
+    return 0
+
+
+def command_extension_list(_args: argparse.Namespace) -> int:
+    emit_json({"ok": True, "extensions": [item.to_dict() for item in list_extensions()]})
+    return 0
+
+
+def emit_extension_error(action: str, exc: Exception) -> None:
+    emit_json(
+        {
+            "ok": False,
+            "action": action,
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "errors": [str(exc)],
+        }
+    )
+
+
+def command_extension_validate(args: argparse.Namespace) -> int:
+    report = validate_extension_pack(Path(args.path))
+    emit_json(report.to_dict())
+    return 0 if report.ok else 1
+
+
+def command_extension_import(args: argparse.Namespace) -> int:
+    try:
+        report = import_extension(Path(args.path))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_extension_error("import", exc)
+        return 1
+    emit_json(report.to_dict())
+    return 0 if report.ok else 1
+
+
+def command_extension_enable(args: argparse.Namespace) -> int:
+    try:
+        report = enable_extension(args.extension_id)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_extension_error("enable", exc)
+        return 1
+    emit_json(report.to_dict())
+    return 0 if report.ok else 1
+
+
+def command_extension_disable(args: argparse.Namespace) -> int:
+    try:
+        report = disable_extension(args.extension_id)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_extension_error("disable", exc)
+        return 1
+    emit_json(report.to_dict())
+    return 0 if report.ok else 1
+
+
+def command_extension_companion_serve(args: argparse.Namespace) -> int:
+    config = ExtensionCompanionConfig(
+        host=args.host,
+        port=args.port,
+        capture_key=args.capture_key or "",
+        tool_session_id=args.tool_session_id or None,
+    )
+    return serve_extension_companion(config)
+
+
+def emit_skill_error(action: str, exc: Exception) -> None:
+    emit_json(
+        {
+            "ok": False,
+            "action": action,
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "errors": [str(exc)],
+        }
+    )
+
+
+def command_skill_validate(args: argparse.Namespace) -> int:
+    try:
+        report = validate_skill_file(Path(args.path))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_skill_error("validate", exc)
+        return 1
+    emit_json(report)
+    return 0 if report.get("ok") else 1
+
+
+def command_skill_describe(args: argparse.Namespace) -> int:
+    try:
+        if args.skill_id:
+            from bubble_mcp.skills.store import get_skill
+
+            report = describe_skill_file(get_skill(args.skill_id).path)
+        elif args.path:
+            report = describe_skill_file(Path(args.path))
+        else:
+            raise ValueError("skill describe requires --path or --skill-id.")
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_skill_error("describe", exc)
+        return 1
+    emit_json(report)
+    return 0 if report.get("ok") else 1
+
+
+def command_skill_import(args: argparse.Namespace) -> int:
+    try:
+        result = import_skill(Path(args.path))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_skill_error("import", exc)
+        return 1
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_skill_export(args: argparse.Namespace) -> int:
+    try:
+        result = export_skill(args.skill_id, Path(args.output))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_skill_error("export", exc)
+        return 1
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_skill_list(args: argparse.Namespace) -> int:
+    try:
+        result = {"ok": True, "skills": [skill.to_dict() for skill in list_skills()]}
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_skill_error("list", exc)
+        return 1
+    emit_json(result)
+    return 0
+
+
+def command_skill_enable(args: argparse.Namespace) -> int:
+    try:
+        result = enable_skill(args.skill_id)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_skill_error("enable", exc)
+        return 1
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_skill_disable(args: argparse.Namespace) -> int:
+    try:
+        result = disable_skill(args.skill_id)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_skill_error("disable", exc)
+        return 1
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_skill_run(args: argparse.Namespace) -> int:
+    try:
+        inputs = _load_optional_json_object(args.inputs) if args.inputs else {}
+        result = run_skill(
+            args.skill_id,
+            inputs=inputs,
+            execute=bool(args.execute),
+            approve_execution=bool(args.approve_execution),
+            run_id=args.run_id or None,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_skill_error("run", exc)
+        return 1
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_skill_author_start(args: argparse.Namespace) -> int:
+    try:
+        result = create_skill_authoring_session(
+            objective=args.objective,
+            risk=args.risk,
+            profile=args.profile or None,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_skill_error("author-start", exc)
+        return 1
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_skill_author_update(args: argparse.Namespace) -> int:
+    try:
+        result = update_skill_authoring_session(args.session_id, answer=args.answer, field=args.field or None)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_skill_error("author-update", exc)
+        return 1
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_skill_author_generate(args: argparse.Namespace) -> int:
+    try:
+        result = generate_skill_from_authoring_session(
+            args.session_id,
+            skill_id=args.skill_id or None,
+            output_dir=Path(args.output_dir) if args.output_dir else None,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_skill_error("author-generate", exc)
+        return 1
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_framework_list(_args: argparse.Namespace) -> int:
+    emit_json(list_frameworks())
+    return 0
+
+
+def command_framework_generate(args: argparse.Namespace) -> int:
+    try:
+        context_summary = _load_optional_json_object(args.context_summary) if args.context_summary else None
+        result = generate_framework_artifacts(
+            framework=args.framework,
+            profile=args.profile,
+            objective=args.objective,
+            scope=args.scope or None,
+            context_summary=context_summary,
+            output_dir=Path(args.output_dir) if args.output_dir else None,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_skill_error("framework-generate", exc)
+        return 1
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_framework_status(args: argparse.Namespace) -> int:
+    try:
+        result = framework_status(
+            framework=args.framework or None,
+            profile=args.profile or None,
+            output_dir=Path(args.output_dir) if args.output_dir else None,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_skill_error("framework-status", exc)
+        return 1
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_language_index(args: argparse.Namespace) -> int:
+    emit_json(build_language_index(profile=args.profile or None))
+    return 0
+
+
+def command_language_query(args: argparse.Namespace) -> int:
+    emit_json(
+        language_query(
+            query=args.query,
+            families=args.family or None,
+            sources=args.source or None,
+            risks=args.risk or None,
+            limit=args.limit,
+            profile=args.profile or None,
+        )
+    )
+    return 0
+
+
+def command_language_detail(args: argparse.Namespace) -> int:
+    emit_json(language_tool_detail(args.tools, detail=args.detail))
+    return 0
+
+
+def command_language_framework_pack(args: argparse.Namespace) -> int:
+    emit_json(
+        framework_language_pack(
+            framework=args.framework,
+            profile=args.profile or None,
+            scope=args.scope or "",
+            max_tools=args.limit,
+        )
+    )
+    return 0
+
+
+def _required_text_arg(args: argparse.Namespace) -> str:
+    text_file = str(getattr(args, "text_file", "") or "").strip()
+    text = str(getattr(args, "text", "") or "")
+    if text_file:
+        text = Path(text_file).expanduser().read_text(encoding="utf-8")
+    if not text.strip():
+        raise ValueError("Provide --text or --text-file.")
+    return text
+
+
+def _required_program_arg(args: argparse.Namespace) -> dict[str, object]:
+    program_file = str(getattr(args, "program_file", "") or "").strip()
+    program = str(getattr(args, "program", "") or "").strip()
+    if program_file:
+        program = Path(program_file).expanduser().read_text(encoding="utf-8")
+    if not program:
+        raise ValueError("Provide --program or --program-file.")
+    return _load_optional_json_object(program)
+
+
+def command_language_text_plan(args: argparse.Namespace) -> int:
+    emit_json(plan_framework_text(args.framework, args.profile, _required_text_arg(args)))
+    return 0
+
+
+def command_language_execute_program(args: argparse.Namespace) -> int:
+    result = execute_framework_program(
+        framework=args.framework,
+        profile=args.profile,
+        program=_required_program_arg(args),
+        mode=args.mode or None,
+        approved=args.approved,
+        artifact_dir=Path(args.artifact_dir).expanduser() if args.artifact_dir else None,
+    )
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_language_workspace_sync(args: argparse.Namespace) -> int:
+    result = sync_artifacts_to_workspace(
+        framework=args.framework,
+        artifact_dir=Path(args.artifact_dir),
+        workspace_dir=Path(args.workspace_dir),
+    )
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_language_cache_status(args: argparse.Namespace) -> int:
+    emit_json(
+        {
+            "ok": True,
+            "language_cache": cached_language_index(args.framework, args.profile),
+        }
+    )
+    return 0
+
+
+def emit_tool_wizard_error(action: str, exc: Exception) -> None:
+    emit_json(
+        {
+            "ok": False,
+            "action": action,
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "errors": [str(exc)],
+        }
+    )
+
+
+def command_tool_wizard_start(args: argparse.Namespace) -> int:
+    try:
+        session = create_authoring_session(
+            intent=args.intent,
+            target=args.target,
+            profile=args.profile,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_tool_wizard_error("start", exc)
+        return 1
+    emit_json(
+        {
+            "ok": True,
+            "session": session.to_dict(),
+            "active": True,
+            "workflow": {
+                "next_user_action": (
+                    "Open the Bubble editor, enable the Chrome companion, perform the target actions, "
+                    "then return and finalize this same session."
+                ),
+                "finish_with": "tool-wizard finalize <session_id>",
+            },
+        }
+    )
+    return 0
+
+
+def command_tool_wizard_add_capture(args: argparse.Namespace) -> int:
+    try:
+        result = append_capture_to_authoring_session(args.session_id, Path(args.file))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_tool_wizard_error("add-capture", exc)
+        return 1
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_tool_wizard_activate(args: argparse.Namespace) -> int:
+    try:
+        result = set_active_authoring_session(args.session_id)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_tool_wizard_error("activate", exc)
+        return 1
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_tool_wizard_describe(args: argparse.Namespace) -> int:
+    try:
+        result = describe_authoring_session(args.session_id)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_tool_wizard_error("describe", exc)
+        return 1
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_tool_wizard_finalize(args: argparse.Namespace) -> int:
+    try:
+        if args.generate_pack:
+            result = generate_authoring_extension_pack(
+                args.session_id,
+                extension_id=args.extension_id or None,
+                tool_name=args.tool_name or None,
+                output_dir=Path(args.output_dir) if args.output_dir else None,
+            )
+        else:
+            result = finalize_authoring_session(args.session_id)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_tool_wizard_error("finalize", exc)
+        return 1
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_tool_wizard_generate(args: argparse.Namespace) -> int:
+    try:
+        result = generate_authoring_extension_pack(
+            args.session_id,
+            extension_id=args.extension_id or None,
+            tool_name=args.tool_name or None,
+            output_dir=Path(args.output_dir) if args.output_dir else None,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_tool_wizard_error("generate", exc)
+        return 1
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def emit_learning_error(action: str, exc: Exception) -> None:
+    emit_json(
+        {
+            "ok": False,
+            "action": action,
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "errors": [str(exc)],
+        }
+    )
+
+
+def command_learning_record(args: argparse.Namespace) -> int:
+    try:
+        value = _load_optional_json_object(args.value)
+        record = append_learning_record(
+            scope=args.scope,
+            key=args.key,
+            value=value,
+            source=args.source,
+            confidence=args.confidence,
+            profile=args.profile or None,
+            project=args.project or None,
+            extension_id=args.extension_id or None,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_learning_error("record", exc)
+        return 1
+    emit_json({"ok": True, "record": record.to_dict()})
+    return 0
+
+
+def command_learning_list(args: argparse.Namespace) -> int:
+    try:
+        records = list_learning_records(
+            scope=args.scope or None,
+            profile=args.profile or None,
+            project=args.project or None,
+            extension_id=args.extension_id or None,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_learning_error("list", exc)
+        return 1
+    emit_json({"ok": True, "records": [record.to_dict() for record in records]})
+    return 0
+
+
+def emit_knowledge_error(action: str, exc: Exception) -> None:
+    emit_json(
+        {
+            "ok": False,
+            "action": action,
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "errors": [str(exc)],
+        }
+    )
+
+
+def command_knowledge_refresh_source(args: argparse.Namespace) -> int:
+    try:
+        result = import_knowledge_records(Path(args.file), source=args.source)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_knowledge_error("refresh-source", exc)
+        return 1
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_knowledge_search(args: argparse.Namespace) -> int:
+    try:
+        result = knowledge_search(args.query, limit=args.limit)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_knowledge_error("search", exc)
+        return 1
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_knowledge_fetch(args: argparse.Namespace) -> int:
+    try:
+        result = fetch_knowledge_record(args.record_id)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_knowledge_error("fetch", exc)
+        return 1
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_knowledge_guidance(args: argparse.Namespace) -> int:
+    try:
+        result = knowledge_search(args.query, limit=args.limit)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        emit_knowledge_error("guidance", exc)
+        return 1
+    if result.get("ok"):
+        emit_json(
+            {
+                **result,
+                "purpose": "manual_guidance",
+                "cache_only": True,
+                "remote_docs": "selective_fetch_available",
+                "knowledge_advice": knowledge_advice(task=args.query, family="manual_guidance"),
+            }
+        )
+        return 0
+    advice = knowledge_advice(task=args.query, family="manual_guidance")
+    guidance = advice.get("guidance", []) if isinstance(advice, dict) else []
+    emit_json(
+        {
+            "ok": bool(advice.get("used")),
+            "query": args.query,
+            "limit": args.limit,
+            "count": len(guidance),
+            "results": [
+                {
+                    "id": item.get("id"),
+                    "source": item.get("source_id"),
+                    "source_url": item.get("source_url"),
+                    "title": item.get("title"),
+                    "summary": item.get("summary"),
+                    "retrieved_at": item.get("retrieved_at"),
+                    "confidence": item.get("confidence"),
+                }
+                for item in guidance[: args.limit]
+            ],
+            "purpose": "manual_guidance",
+            "cache_only": not bool(advice.get("remote_used")),
+            "remote_docs": "selective_fetch",
+            "knowledge_advice": advice,
+        }
+    )
+    return 0 if advice.get("used") else 1
+
+
+def command_tools_guide(args: argparse.Namespace) -> int:
+    emit_json(agent_guide(task=args.task or ""))
+    return 0
+
+
+def command_tools_search(args: argparse.Namespace) -> int:
+    emit_json(search_tool_catalog(args.query, limit=args.limit))
+    return 0
+
+
+def command_tools_recipe(args: argparse.Namespace) -> int:
+    emit_json(
+        task_recipe(
+            args.task,
+            recipe=args.recipe or "",
+            profile=args.profile or "",
+            context=args.context or "",
+            parent=args.parent or "root",
+            execute=args.execute,
+        )
+    )
+    return 0
+
+
+def command_tools_runbook(args: argparse.Namespace) -> int:
+    emit_json(
+        task_runbook(
+            args.task,
+            profile=args.profile or "",
+            context=args.context or "",
+            parent=args.parent or "root",
+            execute=args.execute,
+            search_limit=args.search_limit,
+            include_profile_status=args.include_profile_status,
+        )
+    )
+    return 0
+
+
+def command_tools_coverage(args: argparse.Namespace) -> int:
+    report = catalog_coverage_report(include_tools=bool(args.include_tools))
+    emit_json(report)
+    return 0 if report.get("ok") else 1
+
+
+def command_tools_quality(_args: argparse.Namespace) -> int:
+    report = catalog_quality_report()
+    emit_json(report)
+    return 0 if report.get("ok") else 1
+
+
+def command_readiness(args: argparse.Namespace) -> int:
+    report = run_readiness_check(
+        call_tool,
+        profile=args.profile or "",
+        context=args.context,
+        parent=args.parent,
+        app_id=args.app_id or "",
+        app_version=args.app_version,
+        max_age_hours=args.max_age_hours,
+        include_family_preview=args.include_family_preview,
+        include_details=args.include_details,
+        stop_on_failure=args.stop_on_failure,
+    )
+    emit_json(report)
+    return 0 if report.get("ok") else 1
+
+
+def command_smoke_runtime(args: argparse.Namespace) -> int:
+    result = run_runtime_smoke(
+        call_tool,
+        profile=args.profile or "",
+        context=args.context,
+        parent=args.parent,
+        app_id=args.app_id or "",
+        app_version=args.app_version,
+        suite=args.suite,
+        limit=args.limit,
+        html_url=args.html_url or "",
+        selector=args.selector or "",
+        include_details=args.include_details,
+        stop_on_failure=args.stop_on_failure,
+        execute=args.execute,
+        cleanup=args.cleanup,
+        run_id=args.run_id or "",
+        verify_context=args.verify_context,
+        verification_output=args.verification_output or "",
+    )
+    if args.report:
+        report_path = Path(args.report)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    emit_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="bubble-mcp")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    init_parser = subparsers.add_parser("init", help="Create local Bubble MCP settings.")
+    init_parser.add_argument("--config-dir", default="", help="Override config directory.")
+    init_parser.set_defaults(func=command_init)
+
+    profile_parser = subparsers.add_parser("profile", help="Manage Bubble app profiles.")
+    profile_subparsers = profile_parser.add_subparsers(dest="profile_command", required=True)
+
+    add_parser = profile_subparsers.add_parser("add", help="Add or update a profile.")
+    add_parser.add_argument("name")
+    add_parser.add_argument("--app-id", required=True)
+    add_parser.add_argument("--appname", default="")
+    add_parser.add_argument("--editor-url", default=None)
+    add_parser.add_argument("--app-version", default="test")
+    add_parser.add_argument(
+        "--app-json-path",
+        default="",
+        help="Path to a local .bubble export. This is the authoritative context source when available.",
+    )
+    add_parser.add_argument(
+        "--consolelog-json-path",
+        default="",
+        help=(
+            "Path to a local console.log(app) JSON/text capture. It may complement .bubble; "
+            "without .bubble it is combined with the editor crawler."
+        ),
+    )
+    add_parser.add_argument(
+        "--session-profile",
+        default="",
+        help="Reuse the session captured for another profile of the same app (e.g. a branch profile).",
+    )
+    add_parser.add_argument(
+        "--browser-profile",
+        default="",
+        help="Sign in through a browser profile of its own (e.g. a dedicated collaborator per client) "
+        "instead of the shared one.",
+    )
+    add_parser.set_defaults(func=command_profile_add)
+
+    remove_parser = profile_subparsers.add_parser("remove", help="Remove a profile (its session file is kept).")
+    remove_parser.add_argument("name")
+    remove_parser.add_argument("--force", action="store_true", help="Remove even if other profiles reuse its session.")
+    remove_parser.set_defaults(func=command_profile_remove)
+
+    list_parser = profile_subparsers.add_parser("list", help="List configured profiles.")
+    list_parser.set_defaults(func=command_profile_list)
+
+    status_parser = profile_subparsers.add_parser("status", help="Show read-only readiness status for a profile.")
+    status_parser.add_argument("--profile", default="", help="Profile to inspect. Defaults to settings.default_profile.")
+    status_parser.add_argument("--max-age-hours", type=int, default=24)
+    status_parser.set_defaults(func=command_profile_status)
+
+    refresh_cache_parser = profile_subparsers.add_parser(
+        "refresh-cache",
+        help="Force refresh local cache/context artifacts for one configured profile.",
+    )
+    refresh_cache_parser.add_argument("--profile", required=True)
+    refresh_cache_parser.add_argument("--app-id", default="")
+    refresh_cache_parser.add_argument("--app-version", default="")
+    refresh_cache_parser.add_argument("--output", default="")
+    refresh_cache_parser.add_argument("--bubble-file", default="")
+    refresh_cache_parser.add_argument("--consolelog-file", default="")
+    refresh_cache_parser.add_argument("--no-force", action="store_true")
+    refresh_cache_parser.add_argument("--skip-id-to-path", action="store_true")
+    refresh_cache_parser.add_argument("--max-age-hours", type=int, default=24)
+    refresh_cache_parser.set_defaults(func=command_profile_refresh_cache)
+
+    bootstrap_parser = profile_subparsers.add_parser(
+        "bootstrap",
+        help="Create/update a profile and return setup readiness plus next actions.",
+    )
+    bootstrap_parser.add_argument("profile")
+    bootstrap_parser.add_argument("--app-id", default="")
+    bootstrap_parser.add_argument("--appname", default="")
+    bootstrap_parser.add_argument("--editor-url", default="")
+    bootstrap_parser.add_argument("--app-version", default="test")
+    bootstrap_parser.add_argument("--app-json-path", default="")
+    bootstrap_parser.add_argument("--consolelog-json-path", default="")
+    bootstrap_parser.add_argument("--detect-context", action="store_true")
+    bootstrap_parser.add_argument("--force-context", action="store_true")
+    bootstrap_parser.add_argument("--max-age-hours", type=int, default=24)
+    bootstrap_parser.set_defaults(func=command_profile_bootstrap)
+
+    transfer_parser = subparsers.add_parser("transfer", help="Plan, preview, and execute Bubble project-to-project transfers.")
+    transfer_subparsers = transfer_parser.add_subparsers(dest="transfer_command", required=True)
+
+    transfer_inventory_parser = transfer_subparsers.add_parser("inventory", help="Inspect a source object before transfer.")
+    transfer_inventory_parser.add_argument("--source-profile", required=True)
+    transfer_inventory_parser.add_argument("--source-type", choices=["page", "reusable", "element"], required=True)
+    transfer_inventory_parser.add_argument("--source-ref", required=True)
+    transfer_inventory_parser.add_argument("--source-context", default="")
+    transfer_inventory_parser.add_argument("--include-raw", action="store_true")
+    transfer_inventory_parser.set_defaults(func=command_transfer_inventory)
+
+    transfer_plan_parser = transfer_subparsers.add_parser("plan", help="Create a local transfer plan.")
+    transfer_plan_parser.add_argument("--source-profile", required=True)
+    transfer_plan_parser.add_argument("--target-profile", required=True)
+    transfer_plan_parser.add_argument("--source-type", choices=["page", "reusable", "element"], required=True)
+    transfer_plan_parser.add_argument("--source-ref", required=True)
+    transfer_plan_parser.add_argument("--source-context", default="")
+    transfer_plan_parser.add_argument("--target-context", default="")
+    transfer_plan_parser.add_argument("--target-parent", default="root")
+    transfer_plan_parser.add_argument("--target-name", default="")
+    transfer_plan_parser.add_argument("--conflict-policy", choices=["fail", "rename", "replace", "reuse_existing"], default="fail")
+    transfer_plan_parser.add_argument("--asset-policy", choices=["reference_url", "stage_and_upload", "skip"], default="reference_url")
+    transfer_plan_parser.add_argument("--dependency-policy", choices=["map_only", "map_or_create", "skip_optional"], default="map_or_create")
+    transfer_plan_parser.add_argument("--reuse-policy", choices=["prefer_existing", "exact_only", "create_new"], default="prefer_existing")
+    transfer_plan_parser.add_argument("--collection-policy", choices=["skip", "map_existing", "create_missing", "replace_schema"], default="map_existing")
+    transfer_plan_parser.add_argument("--api-connector-policy", choices=["skip", "map_existing", "structure_only"], default="structure_only")
+    transfer_plan_parser.add_argument("--data-records-policy", choices=["skip", "export_manifest_only", "data_api_import_preview"], default="skip")
+    transfer_plan_parser.set_defaults(func=command_transfer_plan)
+
+    transfer_preview_parser = transfer_subparsers.add_parser("preview", help="Preview a transfer plan.")
+    transfer_preview_parser.add_argument("--transfer-id", required=True)
+    transfer_preview_parser.add_argument("--include-payloads", action="store_true")
+    transfer_preview_parser.set_defaults(func=command_transfer_preview)
+
+    transfer_execute_parser = transfer_subparsers.add_parser("execute", help="Execute a reviewed transfer plan.")
+    transfer_execute_parser.add_argument("--transfer-id", required=True)
+    transfer_execute_parser.add_argument("--execute", action="store_true")
+    transfer_execute_parser.add_argument("--confirm", action="store_true")
+    transfer_execute_parser.add_argument("--max-steps", type=int, default=None)
+    transfer_execute_parser.set_defaults(func=command_transfer_execute)
+
+    transfer_status_parser = transfer_subparsers.add_parser("status", help="Show a local transfer plan.")
+    transfer_status_parser.add_argument("--transfer-id", required=True)
+    transfer_status_parser.set_defaults(func=command_transfer_status)
+
+    browser_parser = subparsers.add_parser("browser", help="Run high-risk browser-assisted Bubble workflows.")
+    browser_subparsers = browser_parser.add_subparsers(dest="browser_command", required=True)
+
+    browser_schedule_parser = browser_subparsers.add_parser(
+        "schedule-deploy",
+        help="Preview or confirm a browser-assisted deploy schedule.",
+    )
+    browser_schedule_parser.add_argument("--profile", required=True)
+    browser_schedule_parser.add_argument("--scheduled-at", required=True)
+    browser_schedule_parser.add_argument("--message", required=True)
+    browser_schedule_parser.add_argument("--execute", action="store_true")
+    browser_schedule_parser.add_argument("--confirm", action="store_true")
+    browser_schedule_parser.add_argument("--preview-id", default="")
+    browser_schedule_parser.add_argument("--retry-count", type=int, default=0)
+    browser_schedule_parser.add_argument("--headless", action="store_true")
+    browser_schedule_parser.add_argument("--wait-seconds", type=int, default=120)
+    browser_schedule_parser.add_argument(
+        "--auto-fix-objective-issues",
+        action="store_true",
+        help="Allow the scheduled deploy to apply allowlisted objective issue fixes before deploying.",
+    )
+    browser_schedule_parser.set_defaults(func=command_browser_schedule_deploy)
+
+    browser_list_parser = browser_subparsers.add_parser("list-deploys", help="List future deploys scheduled by this tool.")
+    browser_list_parser.add_argument("--profile", required=True)
+    browser_list_parser.set_defaults(func=command_browser_list_deploys)
+
+    browser_cancel_parser = browser_subparsers.add_parser("cancel-deploy", help="Cancel a scheduled deploy by id.")
+    browser_cancel_parser.add_argument("--profile", required=True)
+    browser_cancel_parser.add_argument("--deploy-id", required=True)
+    browser_cancel_parser.set_defaults(func=command_browser_cancel_deploy)
+
+    browser_history_parser = browser_subparsers.add_parser("deploy-history", help="List local deploy scheduling history.")
+    browser_history_parser.add_argument("--profile", required=True)
+    browser_history_parser.add_argument("--limit", type=int, default=50)
+    browser_history_parser.add_argument("--exclude-cancelled", action="store_true")
+    browser_history_parser.set_defaults(func=command_browser_deploy_history)
+
+    context_parser = subparsers.add_parser("context", help="Inspect compact Bubble context.")
+    context_subparsers = context_parser.add_subparsers(dest="context_command", required=True)
+
+    summary_parser = context_subparsers.add_parser("summary", help="Summarize a context file.")
+    summary_parser.add_argument("--file", required=True, help="Path to compact context JSON.")
+    summary_parser.set_defaults(func=command_context_summary)
+
+    find_parser = context_subparsers.add_parser("find", help="Search a context file.")
+    find_parser.add_argument("query")
+    find_parser.add_argument("--file", default="", help="Path to compact context JSON. Optional when --profile is provided.")
+    find_parser.add_argument("--profile", default="", help="Configured profile whose active compact context should be searched.")
+    find_parser.add_argument("--limit", type=int, default=10)
+    find_parser.add_argument("--exact", action="store_true", help="Match exact ids, labels, Bubble ids, or context refs.")
+    find_parser.add_argument(
+        "--include-metadata",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Include full node metadata in results. Disable for compact agent verification output.",
+    )
+    find_parser.set_defaults(func=command_context_find)
+
+    import_context_parser = context_subparsers.add_parser(
+        "import",
+        help="Import a Bubble .bubble/consolelog JSON or crawler-index JSON into compact context.",
+    )
+    import_context_parser.add_argument("--file", required=True)
+    import_context_parser.add_argument("--kind", choices=["auto", "bubble", "crawler"], default="auto")
+    import_context_parser.add_argument("--output", default="")
+    import_context_parser.set_defaults(func=command_context_import)
+
+    detect_context_parser = context_subparsers.add_parser(
+        "detect",
+        help=(
+            "Detect context from authoritative .bubble, or combine console.log(app) with the editor crawler."
+        ),
+    )
+    detect_context_parser.add_argument("--profile", required=True)
+    detect_context_parser.add_argument("--app-id", default="")
+    detect_context_parser.add_argument(
+        "--app-version",
+        default="",
+        help="Bubble version/branch id (e.g. test, live, or a branch id). Defaults to the profile's app_version, then the captured session's, then 'test'.",
+    )
+    detect_context_parser.add_argument("--output", default="")
+    detect_context_parser.add_argument("--bubble-file", default="")
+    detect_context_parser.add_argument("--consolelog-file", default="")
+    detect_context_parser.add_argument("--force", action="store_true")
+    detect_context_parser.add_argument("--skip-id-to-path", action="store_true")
+    detect_context_parser.set_defaults(func=command_context_detect)
+
+    inspect_bubble_parser = context_subparsers.add_parser(
+        "inspect-bubble",
+        help=(
+            "Diagnose a .bubble export: sections, version provenance, and whether reusable "
+            "definitions are material or only inferred from _index.id_to_path (sparse export)."
+        ),
+    )
+    inspect_bubble_parser.add_argument("--file", default="", help="Path to a .bubble export. Defaults to the profile's cached export.")
+    inspect_bubble_parser.add_argument("--profile", default="")
+    inspect_bubble_parser.add_argument("--app-id", default="")
+    inspect_bubble_parser.add_argument("--sample-limit", type=int, default=20)
+    inspect_bubble_parser.set_defaults(func=command_context_inspect_bubble)
+
+    hydrate_parser = context_subparsers.add_parser(
+        "hydrate-reusables",
+        help=(
+            "Deterministically fetch missing reusable definitions from the editor path API, "
+            "merge them into the cached .bubble export, re-split modules, and refresh context."
+        ),
+    )
+    hydrate_parser.add_argument("--profile", required=True)
+    hydrate_parser.add_argument("--app-id", default="")
+    hydrate_parser.add_argument(
+        "--app-version",
+        default="",
+        help="Bubble version/branch id. Defaults to the profile's app_version, then the session's, then 'test'.",
+    )
+    hydrate_parser.add_argument("--ids", default="", help="Comma-separated reusable ids. Defaults to every index-only id.")
+    hydrate_parser.add_argument("--batch-size", type=int, default=10)
+    hydrate_parser.add_argument("--file", default="", help="Explicit .bubble path. Defaults to the profile's cached export.")
+    hydrate_parser.set_defaults(func=command_context_hydrate_reusables)
+
+    plan_parser = subparsers.add_parser("plan", help="Create a Bubble plan.")
+    plan_parser.add_argument("message")
+    plan_parser.add_argument("--context", default="index")
+    plan_parser.add_argument("--parent", default="index")
+    plan_parser.set_defaults(func=command_plan)
+
+    validate_parser = subparsers.add_parser("validate-plan", help="Validate a plan JSON file.")
+    validate_parser.add_argument("--file", required=True)
+    validate_parser.add_argument("--execute", action="store_true")
+    validate_parser.set_defaults(func=command_validate_plan)
+
+    import_parser = subparsers.add_parser("import", help="Import external design artifacts.")
+    import_subparsers = import_parser.add_subparsers(dest="import_command", required=True)
+    html_parser = import_subparsers.add_parser("html", help="Convert HTML to a Bubble plan.")
+    html_parser.add_argument("--file", default="", help="Path to an HTML file. Runtime mode also accepts URLs here for compatibility.")
+    html_parser.add_argument("--url", default="", help="URL to hydrate with the advanced runtime importer.")
+    html_parser.add_argument("--context", default="index")
+    html_parser.add_argument("--parent", default="index")
+    html_parser.add_argument("--runtime", action="store_true", help="Use Aria's advanced create-from-html runtime.")
+    html_parser.add_argument("--profile", default="")
+    html_parser.add_argument("--execute", action="store_true")
+    html_parser.add_argument("--selector", default="")
+    html_parser.add_argument("--placement", choices=["top", "bottom"], default="")
+    html_parser.add_argument("--translate-to-existing-styles", action="store_true")
+    html_parser.add_argument("--style-match-threshold", type=float, default=0.78)
+    html_parser.add_argument("--rendered-html", dest="rendered_html", action="store_true")
+    html_parser.add_argument("--no-rendered-html", dest="rendered_html", action="store_false")
+    html_parser.set_defaults(rendered_html=None)
+    html_parser.add_argument("--strict-validate", action="store_true")
+    html_parser.add_argument("--validation-out-dir", default="")
+    html_parser.add_argument("--refresh-context", action="store_true")
+    html_parser.add_argument("--compile", action="store_true")
+    html_parser.add_argument("--app-id", default="")
+    html_parser.add_argument("--app-version", default="test")
+    html_parser.set_defaults(func=command_import_html)
+
+    html_styles_parser = import_subparsers.add_parser(
+        "html-styles",
+        help="Create Bubble style definitions from HTML/CSS selectors.",
+    )
+    html_styles_parser.add_argument("--file", default="", help="Path to an HTML file.")
+    html_styles_parser.add_argument("--url", default="", help="URL to hydrate and inspect with a browser-rendered DOM.")
+    html_styles_parser.add_argument("--html", default="", help="Raw HTML source.")
+    html_styles_parser.add_argument("--profile", required=True)
+    html_styles_parser.add_argument("--execute", action="store_true")
+    html_styles_parser.add_argument("--selector", default="")
+    html_styles_parser.add_argument("--style-name", required=True)
+    html_styles_parser.add_argument("--element-type", required=True)
+    html_styles_parser.add_argument("--rendered-html", dest="rendered_html", action="store_true")
+    html_styles_parser.add_argument("--no-rendered-html", dest="rendered_html", action="store_false")
+    html_styles_parser.set_defaults(rendered_html=None)
+    html_styles_parser.add_argument("--no-states", dest="include_states", action="store_false")
+    html_styles_parser.set_defaults(include_states=True)
+    html_styles_parser.add_argument("--states", default="", help="Comma-separated pseudo-states to import.")
+    html_styles_parser.add_argument("--extra-css", default="", help="Additional CSS to merge with style tags.")
+    html_styles_parser.set_defaults(func=command_import_html_styles)
+
+    eval_parser = subparsers.add_parser("eval", help="Run planning evals.")
+    eval_subparsers = eval_parser.add_subparsers(dest="eval_command", required=True)
+    run_parser = eval_subparsers.add_parser("run", help="Run an eval dataset.")
+    run_parser.add_argument("--dataset", required=True)
+    run_parser.add_argument("--report", default="")
+    run_parser.add_argument("--compile", action="store_true")
+    run_parser.add_argument("--app-id", default="")
+    run_parser.add_argument("--filter", default="", help="Comma-separated case ids to run.")
+    run_parser.add_argument("--failed-from", default="", help="Run only failure ids from a prior JSON report.")
+    run_parser.add_argument("--offset", type=int, default=0, help="Skip this many cases after filtering.")
+    run_parser.add_argument("--limit", type=int, default=0, help="Run at most this many cases after filtering.")
+    run_parser.set_defaults(func=command_eval_run)
+
+    export_expert_parser = eval_subparsers.add_parser(
+        "export-expert",
+        help="Export redacted captured Bubble editor writes into eval cases.",
+    )
+    export_expert_parser.add_argument("--input", required=True)
+    export_expert_parser.add_argument("--output", required=True)
+    export_expert_parser.add_argument("--limit", type=int, default=250)
+    export_expert_parser.set_defaults(func=command_eval_export_expert)
+
+    visual_parser = eval_subparsers.add_parser(
+        "visual",
+        help="Compare two structured visual snapshots for layout/text/image/style drift.",
+    )
+    visual_parser.add_argument("--reference", required=True)
+    visual_parser.add_argument("--actual", required=True)
+    visual_parser.add_argument("--report", default="")
+    visual_parser.add_argument("--tolerance-px", type=float, default=4)
+    visual_parser.add_argument("--tolerance-ratio", type=float, default=0.08)
+    visual_parser.add_argument("--no-require-text", action="store_true")
+    visual_parser.add_argument("--require-images", action="store_true")
+    visual_parser.set_defaults(func=command_eval_visual)
+
+    visual_audit_parser = eval_subparsers.add_parser(
+        "visual-audit",
+        help="Audit visual drift, generate a Bubble repair plan, and optionally execute the repairs.",
+    )
+    visual_audit_parser.add_argument("--reference", default="", help="Reference visual snapshot JSON path.")
+    visual_audit_parser.add_argument("--actual", default="", help="Actual visual snapshot JSON path.")
+    visual_audit_parser.add_argument("--reference-source", default="", help="URL, file, or raw HTML to capture as reference.")
+    visual_audit_parser.add_argument("--actual-source", default="", help="URL, file, or raw HTML to capture as actual.")
+    visual_audit_parser.add_argument("--actual-profile", default="", help="Profile used to capture rendered Bubble actual output.")
+    visual_audit_parser.add_argument("--actual-app-id", default="", help="App id used to capture rendered Bubble actual output.")
+    visual_audit_parser.add_argument("--actual-app-version", default="test")
+    visual_audit_parser.add_argument("--actual-page", default="", help="Bubble page/reusable path for actual capture.")
+    visual_audit_parser.add_argument("--actual-url", default="", help="Explicit actual URL override.")
+    visual_audit_parser.add_argument("--actual-public-base-url", default="")
+    visual_audit_parser.add_argument("--selector", default="", help="Shared selector for reference/actual capture.")
+    visual_audit_parser.add_argument("--reference-selector", default="", help="Reference selector override.")
+    visual_audit_parser.add_argument("--actual-selector", default="", help="Actual selector override.")
+    visual_audit_parser.add_argument("--profile", default="", help="Profile used when execute=true.")
+    visual_audit_parser.add_argument("--context", default="index", help="Bubble page/reusable context for repair steps.")
+    visual_audit_parser.add_argument("--parent", default="root", help="Bubble parent fallback for repair steps.")
+    visual_audit_parser.add_argument("--app-id", default="", help="Bubble app id used when compiling repair steps.")
+    visual_audit_parser.add_argument("--app-version", default="test")
+    visual_audit_parser.add_argument("--execute", action="store_true", help="Execute generated repair steps through Bubble.")
+    visual_audit_parser.add_argument("--report", default="", help="Optional output path for the full audit report.")
+    visual_audit_parser.add_argument("--output-plan", default="", help="Optional output path for just the generated repair plan.")
+    visual_audit_parser.add_argument("--tolerance-px", type=float, default=4)
+    visual_audit_parser.add_argument("--tolerance-ratio", type=float, default=0.08)
+    visual_audit_parser.add_argument("--no-require-text", action="store_true")
+    visual_audit_parser.add_argument("--require-images", action="store_true")
+    visual_audit_parser.add_argument("--reference-screenshot", default="", help="Reference screenshot path for LLM review payload.")
+    visual_audit_parser.add_argument("--actual-screenshot", default="", help="Actual screenshot path for LLM review payload.")
+    visual_audit_parser.add_argument("--screenshot-task", default="", help="Extra instruction for screenshot LLM review.")
+    visual_audit_parser.add_argument("--rendered-html", dest="rendered_html", action="store_true")
+    visual_audit_parser.add_argument("--no-rendered-html", dest="rendered_html", action="store_false")
+    visual_audit_parser.set_defaults(rendered_html=True)
+    visual_audit_parser.add_argument("--viewport-width", type=int, default=1365)
+    visual_audit_parser.add_argument("--viewport-height", type=int, default=768)
+    visual_audit_parser.add_argument("--wait-ms", type=int, default=0)
+    visual_audit_parser.add_argument("--selector-timeout-ms", type=int, default=5000)
+    visual_audit_parser.add_argument("--max-nodes", type=int, default=250)
+    visual_audit_parser.add_argument("--allow-raw-fallback", action=argparse.BooleanOptionalAction, default=True)
+    visual_audit_parser.set_defaults(func=command_eval_visual_audit)
+
+    capture_visual_parser = eval_subparsers.add_parser(
+        "capture-visual",
+        help="Capture a structured visual snapshot from a URL, HTML file, or HTML string.",
+    )
+    capture_visual_parser.add_argument("--source", required=True, help="URL, local HTML file path, or raw HTML source.")
+    capture_visual_parser.add_argument("--selector", default="", help="Optional CSS selector to capture.")
+    capture_visual_parser.add_argument("--output", default="", help="Optional output JSON snapshot path.")
+    capture_visual_parser.add_argument("--rendered-html", dest="rendered_html", action="store_true")
+    capture_visual_parser.add_argument("--no-rendered-html", dest="rendered_html", action="store_false")
+    capture_visual_parser.set_defaults(rendered_html=True)
+    capture_visual_parser.add_argument("--viewport-width", type=int, default=1365)
+    capture_visual_parser.add_argument("--viewport-height", type=int, default=768)
+    capture_visual_parser.add_argument("--wait-ms", type=int, default=0)
+    capture_visual_parser.add_argument("--selector-timeout-ms", type=int, default=5000)
+    capture_visual_parser.add_argument("--max-nodes", type=int, default=250)
+    capture_visual_parser.add_argument("--allow-raw-fallback", action=argparse.BooleanOptionalAction, default=True)
+    capture_visual_parser.add_argument("--app-session-app", default="", help="App name of a stored role session.")
+    capture_visual_parser.add_argument("--role", default="", help="Role whose stored session renders the page.")
+    capture_visual_parser.add_argument("--screenshot", default="", help="Optional full-page PNG path.")
+    capture_visual_parser.add_argument(
+        "--http-auth-app",
+        default="",
+        help="Name whose saved HTTP credentials (eval save-http-auth) open a password-protected site; "
+        "defaults to --app-session-app.",
+    )
+    capture_visual_parser.set_defaults(func=command_eval_capture_visual)
+
+    capture_app_session_parser = eval_subparsers.add_parser(
+        "capture-app-session",
+        help="Sign in once per role with a TEST user in a visible browser and store that app session.",
+    )
+    capture_app_session_parser.add_argument("--role", required=True)
+    capture_app_session_parser.add_argument("--app", default="", help="Name the session is stored under.")
+    capture_app_session_parser.add_argument("--url", default="", help="Login page URL (version-test/branch for Bubble).")
+    capture_app_session_parser.add_argument("--app-id", default="", help="Bubble app id to build the URL from.")
+    capture_app_session_parser.add_argument("--app-version", default="test")
+    capture_app_session_parser.add_argument("--page", default="index")
+    capture_app_session_parser.add_argument("--public-base-url", default="")
+    capture_app_session_parser.add_argument("--target", choices=["bubble", "rebuild"], default="bubble")
+    capture_app_session_parser.set_defaults(func=command_eval_capture_app_session)
+
+    save_http_auth_parser = eval_subparsers.add_parser(
+        "save-http-auth",
+        help="Store the username/password of an app's password-protected test version (asked in the terminal).",
+    )
+    save_http_auth_parser.add_argument("--app", default="", help="Name captures use (default: --app-id).")
+    save_http_auth_parser.add_argument("--url", default="", help="A page of the protected version.")
+    save_http_auth_parser.add_argument("--app-id", default="", help="Bubble app id to build the URL from.")
+    save_http_auth_parser.add_argument("--app-version", default="test")
+    save_http_auth_parser.add_argument("--public-base-url", default="")
+    save_http_auth_parser.set_defaults(func=command_eval_save_http_auth)
+
+    capture_bubble_visual_parser = eval_subparsers.add_parser(
+        "capture-bubble-visual",
+        help="Capture the rendered Bubble app/preview output for a profile, app, page, or explicit URL.",
+    )
+    capture_bubble_visual_parser.add_argument("--profile", default="")
+    capture_bubble_visual_parser.add_argument("--app-id", default="")
+    capture_bubble_visual_parser.add_argument("--app-version", default="test")
+    capture_bubble_visual_parser.add_argument("--page", default="index")
+    capture_bubble_visual_parser.add_argument("--selector", default="")
+    capture_bubble_visual_parser.add_argument("--public-base-url", default="")
+    capture_bubble_visual_parser.add_argument("--url", default="", help="Explicit Bubble app URL override.")
+    capture_bubble_visual_parser.add_argument("--query", default="", help="JSON object or file path with URL query params.")
+    capture_bubble_visual_parser.add_argument("--output", default="")
+    capture_bubble_visual_parser.add_argument("--viewport-width", type=int, default=1365)
+    capture_bubble_visual_parser.add_argument("--viewport-height", type=int, default=768)
+    capture_bubble_visual_parser.add_argument("--wait-ms", type=int, default=1000)
+    capture_bubble_visual_parser.add_argument("--selector-timeout-ms", type=int, default=10000)
+    capture_bubble_visual_parser.add_argument("--max-nodes", type=int, default=250)
+    capture_bubble_visual_parser.add_argument("--role", default="", help="Render as this role's stored test-user session.")
+    capture_bubble_visual_parser.add_argument("--screenshot", default="", help="Optional full-page PNG path.")
+    capture_bubble_visual_parser.set_defaults(func=command_eval_capture_bubble_visual)
+
+    session_parser = subparsers.add_parser("session", help="Manage local Bubble editor sessions.")
+    session_subparsers = session_parser.add_subparsers(dest="session_command", required=True)
+
+    session_import_parser = session_subparsers.add_parser(
+        "import",
+        help="Import a Bubble editor session JSON with headers/cookies.",
+    )
+    session_import_parser.add_argument("--profile", required=True)
+    session_import_parser.add_argument("--file", required=True)
+    session_import_parser.add_argument("--app-id", default="")
+    session_import_parser.set_defaults(func=command_session_import)
+
+    session_login_parser = session_subparsers.add_parser(
+        "login",
+        help="Open a local browser and capture Bubble cookies for a profile.",
+    )
+    session_login_parser.add_argument("--profile", required=True)
+    session_login_parser.add_argument("--app-id", required=True)
+    session_login_parser.add_argument("--editor-url", default="")
+    session_login_parser.add_argument("--app-version", default="")
+    session_login_parser.add_argument(
+        "--wait-seconds",
+        type=positive_int,
+        default=DEFAULT_LOGIN_WAIT_SECONDS,
+        help=(
+            "Maximum time to keep the browser open while polling and saving the latest Bubble cookies. "
+            "The window is closed as soon as this runs out, so leave room for two-factor codes."
+        ),
+    )
+    session_login_parser.add_argument("--headless", action="store_true")
+    session_login_parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress human-readable capture progress on stderr.",
+    )
+    session_login_parser.set_defaults(func=command_session_login)
+
+    session_list_parser = session_subparsers.add_parser("list", help="List imported session metadata.")
+    session_list_parser.set_defaults(func=command_session_list)
+
+    session_inspect_parser = session_subparsers.add_parser(
+        "inspect",
+        help="Inspect redacted session data and computed Bubble write headers.",
+    )
+    session_inspect_parser.add_argument("--profile", required=True)
+    session_inspect_parser.add_argument("--app-id", default="")
+    session_inspect_parser.set_defaults(func=command_session_inspect)
+
+    write_parser = subparsers.add_parser("write", help="Send a Bubble /appeditor/write payload.")
+    write_parser.add_argument("--profile", required=True)
+    write_parser.add_argument("--payload", required=True)
+    write_parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Actually post to Bubble. Without this flag the command validates and prints the request.",
+    )
+    write_parser.set_defaults(func=command_write)
+
+    plugin_parser = subparsers.add_parser("plugin", help="Inspect and manage Bubble plugins.")
+    plugin_subparsers = plugin_parser.add_subparsers(dest="plugin_command", required=True)
+
+    plugin_install_parser = plugin_subparsers.add_parser(
+        "install",
+        help="Preview or install a Bubble plugin through /appeditor/write.",
+    )
+    plugin_install_parser.add_argument("--profile", required=True)
+    plugin_install_parser.add_argument(
+        "--plugin-key",
+        required=True,
+        help="Plugin registry key or element/action type, such as progressbar or progressbar-ProgressBar.",
+    )
+    plugin_install_parser.add_argument("--app-id", default="")
+    plugin_install_parser.add_argument("--app-version", default="")
+    plugin_install_parser.add_argument(
+        "--plugin-value",
+        default=None,
+        help="JSON scalar value for settings.client_safe.plugins.<plugin_key>; defaults to true.",
+    )
+    plugin_install_parser.add_argument(
+        "--installed-version",
+        default=None,
+        help="JSON scalar value for the installed-version setting; defaults to 1.",
+    )
+    plugin_install_parser.add_argument("--installed-version-key", default="")
+    plugin_install_parser.add_argument("--id-counter", type=int, default=None)
+    plugin_install_parser.add_argument("--no-installed-version", action="store_true")
+    plugin_install_parser.add_argument("--no-post-check-conflicts", action="store_true")
+    plugin_install_parser.add_argument("--no-calculate-derived", action="store_true")
+    plugin_install_parser.add_argument("--no-notify-ai-context-change", action="store_true")
+    plugin_install_parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Actually post to Bubble. Without this flag the command previews the write and post-install requests.",
+    )
+    plugin_install_parser.set_defaults(func=command_plugin_install)
+
+    branch_parser = subparsers.add_parser("branch", help="Inspect and manage Bubble editor branches.")
+    branch_subparsers = branch_parser.add_subparsers(dest="branch_command", required=True)
+
+    branch_list_parser = branch_subparsers.add_parser("list", help="List Bubble branches for a profile.")
+    branch_list_parser.add_argument("--profile", required=True)
+    branch_list_parser.add_argument("--app-id", default="")
+    branch_list_parser.set_defaults(func=command_branch_list)
+
+    branch_contributors_parser = branch_subparsers.add_parser(
+        "contributors",
+        help="List contributors for a Bubble branch/version.",
+    )
+    branch_contributors_parser.add_argument("--profile", required=True)
+    branch_contributors_parser.add_argument("--app-id", default="")
+    branch_contributors_parser.add_argument("--app-version", default="")
+    branch_contributors_parser.set_defaults(func=command_branch_contributors)
+
+    branch_create_parser = branch_subparsers.add_parser("create", help="Create a Bubble branch or sub-branch.")
+    branch_create_parser.add_argument("--profile", required=True)
+    branch_create_parser.add_argument("--name", required=True, help="Display name for the new Bubble branch.")
+    branch_create_parser.add_argument("--app-id", default="")
+    branch_create_parser.add_argument(
+        "--from-app-version",
+        default="",
+        help="Source branch/version. Use an existing branch id to create a sub-branch.",
+    )
+    branch_create_parser.add_argument("--description", default="")
+    branch_create_parser.add_argument("--version-control-api-version", type=int, default=7)
+    branch_create_parser.add_argument("--execute", action="store_true")
+    branch_create_parser.set_defaults(func=command_branch_create)
+
+    branch_delete_parser = branch_subparsers.add_parser("delete", help="Delete a Bubble branch/version.")
+    branch_delete_parser.add_argument("--profile", required=True)
+    branch_delete_parser.add_argument("--app-version", required=True, help="Branch/version id to delete.")
+    branch_delete_parser.add_argument("--app-id", default="")
+    branch_delete_parser.add_argument("--hard-delete", action="store_true", help="Disable Bubble soft-delete flag.")
+    branch_delete_parser.add_argument("--execute", action="store_true")
+    branch_delete_parser.add_argument("--confirm", action="store_true")
+    branch_delete_parser.set_defaults(func=command_branch_delete)
+
+    branch_merge_start_parser = branch_subparsers.add_parser(
+        "merge-start",
+        help="Preview or start a Bubble branch merge through /appeditor/sync.",
+    )
+    branch_merge_start_parser.add_argument("--profile", required=True)
+    branch_merge_start_parser.add_argument("--app-id", default="")
+    branch_merge_start_parser.add_argument("--ours-version-id", required=True)
+    branch_merge_start_parser.add_argument("--theirs-version-id", required=True)
+    branch_merge_start_parser.add_argument("--savepoint-message", required=True)
+    branch_merge_start_parser.add_argument("--session-id", default="")
+    branch_merge_start_parser.add_argument("--execute", action="store_true")
+    branch_merge_start_parser.set_defaults(func=command_branch_merge_start)
+
+    branch_merge_confirm_parser = branch_subparsers.add_parser(
+        "merge-confirm",
+        help="Preview or confirm a Bubble branch merge after non-conflicting changes or resolved conflicts.",
+    )
+    branch_merge_confirm_parser.add_argument("--profile", required=True)
+    branch_merge_confirm_parser.add_argument("--app-id", default="")
+    branch_merge_confirm_parser.add_argument("--merge-app-version", required=True)
+    branch_merge_confirm_parser.add_argument("--session-id", default="")
+    branch_merge_confirm_parser.add_argument(
+        "--conflicts-resolved",
+        action="store_true",
+        help="Use after conflict-resolution writes were applied; emits ResolveMergeChanges.",
+    )
+    branch_merge_confirm_parser.add_argument("--execute", action="store_true")
+    branch_merge_confirm_parser.set_defaults(func=command_branch_merge_confirm)
+
+    branch_merge_conflicts_describe_parser = branch_subparsers.add_parser(
+        "merge-conflicts-describe",
+        help="Describe Bubble merge conflict write payloads for manual developer decision-making.",
+    )
+    branch_merge_conflicts_describe_parser.add_argument("--file", required=True, help="JSON file containing a Bubble write payload.")
+    branch_merge_conflicts_describe_parser.set_defaults(func=command_branch_merge_conflicts_describe)
+
+    branch_merge_resolve_conflicts_parser = branch_subparsers.add_parser(
+        "merge-resolve-conflicts",
+        help="Preview or apply Bubble's ResolveConflicts write before finalizing a merge.",
+    )
+    branch_merge_resolve_conflicts_parser.add_argument("--profile", required=True)
+    branch_merge_resolve_conflicts_parser.add_argument("--app-id", default="")
+    branch_merge_resolve_conflicts_parser.add_argument("--merge-app-version", required=True)
+    branch_merge_resolve_conflicts_parser.add_argument("--changelog-data", default="", help="JSON object with changelog_data array.")
+    branch_merge_resolve_conflicts_parser.add_argument("--session-id", default="")
+    branch_merge_resolve_conflicts_parser.add_argument("--execute", action="store_true")
+    branch_merge_resolve_conflicts_parser.set_defaults(func=command_branch_merge_resolve_conflicts)
+
+    branch_merge_finalize_parser = branch_subparsers.add_parser(
+        "merge-finalize",
+        help="Preview or finalize a Bubble branch merge through /appeditor/finalize_merge.",
+    )
+    branch_merge_finalize_parser.add_argument("--profile", required=True)
+    branch_merge_finalize_parser.add_argument("--app-id", default="")
+    branch_merge_finalize_parser.add_argument("--merge-app-version", required=True)
+    branch_merge_finalize_parser.add_argument("--target-version-id", required=True)
+    branch_merge_finalize_parser.add_argument("--source-version-id", required=True)
+    branch_merge_finalize_parser.add_argument("--source-branch-name", required=True)
+    branch_merge_finalize_parser.add_argument("--user-id", default="")
+    branch_merge_finalize_parser.add_argument("--savepoint-message", default="")
+    branch_merge_finalize_parser.add_argument("--version-control-api-version", type=int, default=7)
+    branch_merge_finalize_parser.add_argument("--execute", action="store_true")
+    branch_merge_finalize_parser.set_defaults(func=command_branch_merge_finalize)
+
+    changelog_parser = subparsers.add_parser("changelog", help="Fetch Bubble editor changelog entries.")
+    changelog_subparsers = changelog_parser.add_subparsers(dest="changelog_command", required=True)
+    changelog_fetch_parser = changelog_subparsers.add_parser("fetch", help="Fetch Bubble changelog entries.")
+    changelog_fetch_parser.add_argument("--profile", required=True)
+    changelog_fetch_parser.add_argument("--app-id", default="")
+    changelog_fetch_parser.add_argument("--app-version", default="")
+    changelog_fetch_parser.add_argument("--start-index", type=int, default=0)
+    changelog_fetch_parser.add_argument("--num-fetch", type=int, default=50)
+    changelog_fetch_parser.add_argument("--filters", default="", help="JSON object or path to JSON object.")
+    changelog_fetch_parser.add_argument("--start-timestamp", type=int, default=None)
+    changelog_fetch_parser.add_argument("--end-timestamp", type=int, default=None)
+    changelog_fetch_parser.add_argument("--change-type", default="")
+    changelog_fetch_parser.add_argument("--root", default="")
+    changelog_fetch_parser.add_argument("--change-identifier", default="")
+    changelog_fetch_parser.add_argument("--change-path", default="")
+    changelog_fetch_parser.add_argument("--user-id", action="append", default=[])
+    changelog_fetch_parser.set_defaults(func=command_changelog_fetch)
+
+    metrics_parser = subparsers.add_parser("metrics", help="Read Bubble editor performance, workload, log, and usage data.")
+    metrics_subparsers = metrics_parser.add_subparsers(dest="metrics_command", required=True)
+
+    metrics_audit_parser = metrics_subparsers.add_parser("audit", help="Run a compact read-only performance audit.")
+    metrics_audit_parser.add_argument("--profile", required=True)
+    metrics_audit_parser.add_argument("--app-id", default="")
+    metrics_audit_parser.add_argument("--app-version", default="", help="Defaults to live for log sampling.")
+    metrics_audit_parser.add_argument("--start", default="", help="ISO datetime or epoch milliseconds. Defaults to 30 days ago.")
+    metrics_audit_parser.add_argument("--end", default="", help="ISO datetime or epoch milliseconds. Defaults to now.")
+    metrics_audit_parser.add_argument("--granularity", choices=["minute", "hour", "day"], default="day")
+    metrics_audit_parser.add_argument("--platform", choices=["web", "mobile", "web_and_mobile"], default="web_and_mobile")
+    metrics_audit_parser.add_argument("--no-logs", action="store_true")
+    metrics_audit_parser.add_argument("--include-raw", action="store_true")
+    metrics_audit_parser.set_defaults(func=command_metrics_audit)
+
+    workload_date_parser = metrics_subparsers.add_parser("workload-by-date", help="Read workload usage by date.")
+    workload_date_parser.add_argument("--profile", required=True)
+    workload_date_parser.add_argument("--app-id", default="")
+    workload_date_parser.add_argument("--start", required=True)
+    workload_date_parser.add_argument("--end", required=True)
+    workload_date_parser.add_argument("--granularity", choices=["minute", "hour", "day"], default="day")
+    workload_date_parser.add_argument("--include-raw", action="store_true")
+    workload_date_parser.set_defaults(func=command_metrics_workload_by_date)
+
+    workload_breakdown_parser = metrics_subparsers.add_parser("workload-breakdown", help="Read workload usage breakdown.")
+    workload_breakdown_parser.add_argument("--profile", required=True)
+    workload_breakdown_parser.add_argument("--app-id", default="")
+    workload_breakdown_parser.add_argument("--start", required=True)
+    workload_breakdown_parser.add_argument("--end", required=True)
+    workload_breakdown_parser.add_argument("--granularity", choices=["minute", "hour", "day"], default="day")
+    workload_breakdown_parser.add_argument("--tag1", default="")
+    workload_breakdown_parser.add_argument("--tag2", default="")
+    workload_breakdown_parser.add_argument("--platform", choices=["web", "mobile", "web_and_mobile"], default="web_and_mobile")
+    workload_breakdown_parser.add_argument("--limit", type=int, default=50)
+    workload_breakdown_parser.add_argument("--include-raw", action="store_true")
+    workload_breakdown_parser.set_defaults(func=command_metrics_workload_breakdown)
+
+    logs_parser = metrics_subparsers.add_parser("logs", help="Fetch Bubble Jetstream logs.")
+    logs_parser.add_argument("--profile", required=True)
+    logs_parser.add_argument("--app-id", default="")
+    logs_parser.add_argument("--app-version", default="", help="Defaults to live.")
+    logs_parser.add_argument("--start", required=True)
+    logs_parser.add_argument("--end", required=True)
+    logs_parser.add_argument("--message", action="append", default=[], help="Log message tag to include. Repeatable.")
+    logs_parser.add_argument("--contains", default="", help="Filter by workflow or action display name.")
+    logs_parser.add_argument("--descending", action="store_true")
+    logs_parser.add_argument("--no-state-ar", action="store_true")
+    logs_parser.add_argument("--paginate", action="store_true", help="Walk capped log pages across the time window.")
+    logs_parser.add_argument("--max-pages", type=int, default=10, help="Pagination request limit (1-25).")
+    logs_parser.add_argument("--limit", type=int, default=100)
+    logs_parser.add_argument("--include-raw", action="store_true")
+    logs_parser.set_defaults(func=command_metrics_logs)
+
+    plan_usage_parser = metrics_subparsers.add_parser("plan-usage", help="Read current app plan usage.")
+    plan_usage_parser.add_argument("--profile", required=True)
+    plan_usage_parser.add_argument("--app-id", default="")
+    plan_usage_parser.add_argument("--include-raw", action="store_true")
+    plan_usage_parser.set_defaults(func=command_metrics_plan_usage)
+
+    workflow_runs_parser = metrics_subparsers.add_parser("workflow-runs", help="Read workflow run counts.")
+    workflow_runs_parser.add_argument("--profile", required=True)
+    workflow_runs_parser.add_argument("--app-id", default="")
+    workflow_runs_parser.add_argument("--platform", choices=["web", "mobile", "web_and_mobile"], default="web_and_mobile")
+    workflow_runs_parser.add_argument("--include-raw", action="store_true")
+    workflow_runs_parser.set_defaults(func=command_metrics_workflow_runs)
+
+    storage_parser = metrics_subparsers.add_parser("storage", help="Read storage usage and allowance.")
+    storage_parser.add_argument("--profile", required=True)
+    storage_parser.add_argument("--app-id", default="")
+    storage_parser.add_argument("--no-refresh", action="store_true")
+    storage_parser.add_argument("--include-raw", action="store_true")
+    storage_parser.set_defaults(func=command_metrics_storage)
+
+    time_series_parser = metrics_subparsers.add_parser("time-series", help="Read a Bubble editor time-series metric.")
+    time_series_parser.add_argument("--profile", required=True)
+    time_series_parser.add_argument("--app-id", default="")
+    time_series_parser.add_argument("--start", required=True)
+    time_series_parser.add_argument("--end", required=True)
+    time_series_parser.add_argument("--metric", required=True)
+    time_series_parser.add_argument("--resolution", type=float, default=None)
+    time_series_parser.add_argument("--no-observe", action="store_true")
+    time_series_parser.add_argument("--include-raw", action="store_true")
+    time_series_parser.set_defaults(func=command_metrics_time_series)
+
+    extension_parser = subparsers.add_parser("extension", help="Manage local Bubble MCP extension packs.")
+    extension_subparsers = extension_parser.add_subparsers(dest="extension_command", required=True)
+
+    extension_list_parser = extension_subparsers.add_parser("list", help="List installed extension packs.")
+    extension_list_parser.set_defaults(func=command_extension_list)
+
+    extension_validate_parser = extension_subparsers.add_parser("validate", help="Validate an extension pack directory.")
+    extension_validate_parser.add_argument("--path", required=True)
+    extension_validate_parser.set_defaults(func=command_extension_validate)
+
+    extension_import_parser = extension_subparsers.add_parser("import", help="Import an extension pack directory.")
+    extension_import_parser.add_argument("--path", required=True)
+    extension_import_parser.set_defaults(func=command_extension_import)
+
+    extension_enable_parser = extension_subparsers.add_parser("enable", help="Enable an installed extension pack.")
+    extension_enable_parser.add_argument("extension_id")
+    extension_enable_parser.set_defaults(func=command_extension_enable)
+
+    extension_disable_parser = extension_subparsers.add_parser("disable", help="Disable an installed extension pack.")
+    extension_disable_parser.add_argument("extension_id")
+    extension_disable_parser.set_defaults(func=command_extension_disable)
+
+    extension_companion_parser = extension_subparsers.add_parser(
+        "companion",
+        help="Run local services used by the shipped Chrome extension companion.",
+    )
+    extension_companion_subparsers = extension_companion_parser.add_subparsers(
+        dest="extension_companion_command",
+        required=True,
+    )
+    extension_companion_serve_parser = extension_companion_subparsers.add_parser(
+        "serve",
+        help="Start the local HTTP listener used by chrome-extension/.",
+    )
+    extension_companion_serve_parser.add_argument("--host", default="127.0.0.1")
+    extension_companion_serve_parser.add_argument("--port", type=int, default=3847)
+    extension_companion_serve_parser.add_argument(
+        "--capture-key",
+        default="",
+        help="Optional key required from the extension in X-Bubble-MCP-Capture-Key.",
+    )
+    extension_companion_serve_parser.add_argument(
+        "--tool-session-id",
+        default="",
+        help="Optional tool-authoring session id that receives write captures.",
+    )
+    extension_companion_serve_parser.set_defaults(func=command_extension_companion_serve)
+
+    skill_parser = subparsers.add_parser("skill", help="Validate declarative Bubble MCP skill contracts.")
+    skill_subparsers = skill_parser.add_subparsers(dest="skill_command", required=True)
+
+    skill_validate_parser = skill_subparsers.add_parser("validate", help="Validate a skill contract JSON file.")
+    skill_validate_parser.add_argument("--path", required=True)
+    skill_validate_parser.set_defaults(func=command_skill_validate)
+
+    skill_describe_parser = skill_subparsers.add_parser("describe", help="Describe a validated skill contract JSON file.")
+    skill_describe_parser.add_argument("--path", default="")
+    skill_describe_parser.add_argument("--skill-id", default="")
+    skill_describe_parser.set_defaults(func=command_skill_describe)
+
+    skill_import_parser = skill_subparsers.add_parser("import", help="Import a skill contract JSON file.")
+    skill_import_parser.add_argument("--path", required=True)
+    skill_import_parser.set_defaults(func=command_skill_import)
+
+    skill_export_parser = skill_subparsers.add_parser("export", help="Export an installed skill contract.")
+    skill_export_parser.add_argument("skill_id")
+    skill_export_parser.add_argument("--output", required=True)
+    skill_export_parser.set_defaults(func=command_skill_export)
+
+    skill_list_parser = skill_subparsers.add_parser("list", help="List installed and extension-provided skills.")
+    skill_list_parser.set_defaults(func=command_skill_list)
+
+    skill_enable_parser = skill_subparsers.add_parser("enable", help="Enable an imported skill.")
+    skill_enable_parser.add_argument("skill_id")
+    skill_enable_parser.set_defaults(func=command_skill_enable)
+
+    skill_disable_parser = skill_subparsers.add_parser("disable", help="Disable an imported skill.")
+    skill_disable_parser.add_argument("skill_id")
+    skill_disable_parser.set_defaults(func=command_skill_disable)
+
+    skill_run_parser = skill_subparsers.add_parser("run", help="Preview or execute an approved skill run.")
+    skill_run_parser.add_argument("skill_id")
+    skill_run_parser.add_argument("--inputs", default="", help="JSON object text or path.")
+    skill_run_parser.add_argument("--execute", action="store_true")
+    skill_run_parser.add_argument("--approve-execution", action="store_true")
+    skill_run_parser.add_argument("--run-id", default="")
+    skill_run_parser.set_defaults(func=command_skill_run)
+
+    skill_author_parser = skill_subparsers.add_parser("author", help="Create or update skills interactively.")
+    skill_author_subparsers = skill_author_parser.add_subparsers(dest="skill_author_command", required=True)
+    skill_author_start_parser = skill_author_subparsers.add_parser("start", help="Start a skill-authoring session.")
+    skill_author_start_parser.add_argument("--objective", required=True)
+    skill_author_start_parser.add_argument(
+        "--risk",
+        choices=["read_only", "mutating", "destructive"],
+        default="read_only",
+    )
+    skill_author_start_parser.add_argument("--profile", default="")
+    skill_author_start_parser.set_defaults(func=command_skill_author_start)
+
+    skill_author_update_parser = skill_author_subparsers.add_parser("update", help="Add an answer to a skill session.")
+    skill_author_update_parser.add_argument("session_id")
+    skill_author_update_parser.add_argument("--answer", required=True)
+    skill_author_update_parser.add_argument("--field", default="")
+    skill_author_update_parser.set_defaults(func=command_skill_author_update)
+
+    skill_author_generate_parser = skill_author_subparsers.add_parser(
+        "generate",
+        help="Generate a skill contract from a skill session.",
+    )
+    skill_author_generate_parser.add_argument("session_id")
+    skill_author_generate_parser.add_argument("--skill-id", default="")
+    skill_author_generate_parser.add_argument("--output-dir", default="")
+    skill_author_generate_parser.set_defaults(func=command_skill_author_generate)
+
+    language_parser = subparsers.add_parser("language", help="Inspect the dynamic Bubble MCP language registry.")
+    language_subparsers = language_parser.add_subparsers(dest="language_command", required=True)
+
+    language_index_parser = language_subparsers.add_parser("index", help="Return compact registry index.")
+    language_index_parser.add_argument("--profile", default="")
+    language_index_parser.set_defaults(func=command_language_index)
+
+    language_query_parser = language_subparsers.add_parser("query", help="Query compact language entries.")
+    language_query_parser.add_argument("query")
+    language_query_parser.add_argument("--family", action="append", default=[])
+    language_query_parser.add_argument("--source", action="append", default=[])
+    language_query_parser.add_argument("--risk", action="append", default=[])
+    language_query_parser.add_argument("--limit", type=int, default=12)
+    language_query_parser.add_argument("--profile", default="")
+    language_query_parser.set_defaults(func=command_language_query)
+
+    language_detail_parser = language_subparsers.add_parser("detail", help="Lazy-load selected tool detail.")
+    language_detail_parser.add_argument("tools", nargs="+")
+    language_detail_parser.add_argument("--detail", choices=["compact", "full"], default="compact")
+    language_detail_parser.set_defaults(func=command_language_detail)
+
+    language_pack_parser = language_subparsers.add_parser("framework-pack", help="Return framework-shaped language pack.")
+    language_pack_parser.add_argument("--framework", choices=["bmad", "superpowers", "sdd"], required=True)
+    language_pack_parser.add_argument("--profile", default="")
+    language_pack_parser.add_argument("--scope", default="")
+    language_pack_parser.add_argument("--limit", type=int, default=12)
+    language_pack_parser.set_defaults(func=command_language_framework_pack)
+
+    language_text_plan_parser = language_subparsers.add_parser(
+        "text-plan",
+        help="Plan a compact framework program from natural-language text.",
+    )
+    language_text_plan_parser.add_argument("--framework", choices=["bmad", "superpowers", "sdd"], required=True)
+    language_text_plan_parser.add_argument("--profile", required=True)
+    language_text_plan_parser.add_argument("--text", default="")
+    language_text_plan_parser.add_argument("--text-file", default="")
+    language_text_plan_parser.set_defaults(func=command_language_text_plan)
+
+    language_execute_program_parser = language_subparsers.add_parser(
+        "execute-program",
+        help="Preview or execute a compact framework program.",
+    )
+    language_execute_program_parser.add_argument("--framework", choices=["bmad", "superpowers", "sdd"], required=True)
+    language_execute_program_parser.add_argument("--profile", required=True)
+    language_execute_program_parser.add_argument("--program", default="")
+    language_execute_program_parser.add_argument("--program-file", default="")
+    language_execute_program_parser.add_argument("--mode", choices=["preview", "execute"], default="preview")
+    language_execute_program_parser.add_argument("--approved", action="store_true")
+    language_execute_program_parser.add_argument("--artifact-dir", default="")
+    language_execute_program_parser.set_defaults(func=command_language_execute_program)
+
+    language_workspace_sync_parser = language_subparsers.add_parser(
+        "workspace-sync",
+        help="Sync generated framework artifacts into a framework workspace.",
+    )
+    language_workspace_sync_parser.add_argument("--framework", choices=["bmad", "superpowers", "sdd"], required=True)
+    language_workspace_sync_parser.add_argument("--artifact-dir", required=True)
+    language_workspace_sync_parser.add_argument("--workspace-dir", required=True)
+    language_workspace_sync_parser.set_defaults(func=command_language_workspace_sync)
+
+    language_cache_status_parser = language_subparsers.add_parser(
+        "cache-status",
+        help="Return cached framework/profile language index status.",
+    )
+    language_cache_status_parser.add_argument("--framework", choices=["bmad", "superpowers", "sdd"], required=True)
+    language_cache_status_parser.add_argument("--profile", required=True)
+    language_cache_status_parser.set_defaults(func=command_language_cache_status)
+
+    framework_parser = subparsers.add_parser(
+        "framework",
+        help="Generate BMAD, Superpowers, or SDD artifacts from Bubble MCP context.",
+    )
+    framework_subparsers = framework_parser.add_subparsers(dest="framework_command", required=True)
+
+    framework_list_parser = framework_subparsers.add_parser("list", help="List supported framework adapters.")
+    framework_list_parser.set_defaults(func=command_framework_list)
+
+    framework_generate_parser = framework_subparsers.add_parser(
+        "generate",
+        help="Generate local framework artifacts.",
+    )
+    framework_generate_parser.add_argument("--framework", choices=["bmad", "superpowers", "sdd"], required=True)
+    framework_generate_parser.add_argument("--profile", required=True)
+    framework_generate_parser.add_argument("--objective", required=True)
+    framework_generate_parser.add_argument("--scope", default="")
+    framework_generate_parser.add_argument("--context-summary", default="", help="JSON object text or path.")
+    framework_generate_parser.add_argument("--output-dir", default="")
+    framework_generate_parser.set_defaults(func=command_framework_generate)
+
+    framework_status_parser = framework_subparsers.add_parser(
+        "status",
+        help="Inspect generated framework artifacts.",
+    )
+    framework_status_parser.add_argument("--framework", choices=["bmad", "superpowers", "sdd"], default="")
+    framework_status_parser.add_argument("--profile", default="")
+    framework_status_parser.add_argument("--output-dir", default="")
+    framework_status_parser.set_defaults(func=command_framework_status)
+
+    tool_wizard_parser = subparsers.add_parser(
+        "tool-wizard",
+        help="Manage local tool-authoring sessions from captured Bubble writes.",
+    )
+    tool_wizard_subparsers = tool_wizard_parser.add_subparsers(dest="tool_wizard_command", required=True)
+
+    tool_wizard_start_parser = tool_wizard_subparsers.add_parser(
+        "start",
+        help="Start a local tool-authoring session.",
+    )
+    tool_wizard_start_parser.add_argument("--intent", required=True)
+    tool_wizard_start_parser.add_argument("--target", required=True)
+    tool_wizard_start_parser.add_argument("--profile", required=True)
+    tool_wizard_start_parser.set_defaults(func=command_tool_wizard_start)
+
+    tool_wizard_add_parser = tool_wizard_subparsers.add_parser(
+        "add-capture",
+        help="Add and classify a captured Bubble editor write JSON file.",
+    )
+    tool_wizard_add_parser.add_argument("session_id")
+    tool_wizard_add_parser.add_argument("--file", required=True)
+    tool_wizard_add_parser.set_defaults(func=command_tool_wizard_add_capture)
+
+    tool_wizard_activate_parser = tool_wizard_subparsers.add_parser(
+        "activate",
+        help="Mark an existing tool-authoring session as the active Chrome extension capture target.",
+    )
+    tool_wizard_activate_parser.add_argument("session_id")
+    tool_wizard_activate_parser.set_defaults(func=command_tool_wizard_activate)
+
+    tool_wizard_describe_parser = tool_wizard_subparsers.add_parser(
+        "describe",
+        help="Describe a local tool-authoring session and aggregate classification.",
+    )
+    tool_wizard_describe_parser.add_argument("session_id")
+    tool_wizard_describe_parser.set_defaults(func=command_tool_wizard_describe)
+
+    tool_wizard_finalize_parser = tool_wizard_subparsers.add_parser(
+        "finalize",
+        help="Finalize a tool-authoring capture session and return learned patterns, questions, and test guidance.",
+    )
+    tool_wizard_finalize_parser.add_argument("session_id")
+    tool_wizard_finalize_parser.add_argument("--generate-pack", action="store_true")
+    tool_wizard_finalize_parser.add_argument("--extension-id", default="")
+    tool_wizard_finalize_parser.add_argument("--tool-name", default="")
+    tool_wizard_finalize_parser.add_argument("--output-dir", default="")
+    tool_wizard_finalize_parser.set_defaults(func=command_tool_wizard_finalize)
+
+    tool_wizard_generate_parser = tool_wizard_subparsers.add_parser(
+        "generate",
+        help="Generate a candidate extension pack from a finalized tool-authoring session.",
+    )
+    tool_wizard_generate_parser.add_argument("session_id")
+    tool_wizard_generate_parser.add_argument("--extension-id", default="")
+    tool_wizard_generate_parser.add_argument("--tool-name", default="")
+    tool_wizard_generate_parser.add_argument("--output-dir", default="")
+    tool_wizard_generate_parser.set_defaults(func=command_tool_wizard_generate)
+
+    learning_parser = subparsers.add_parser("learning", help="Manage local consultative learning records.")
+    learning_subparsers = learning_parser.add_subparsers(dest="learning_command", required=True)
+
+    learning_record_parser = learning_subparsers.add_parser(
+        "record",
+        help="Append one scoped consultative learning record.",
+    )
+    learning_record_parser.add_argument(
+        "--scope",
+        choices=["global", "profile", "project", "extension"],
+        required=True,
+    )
+    learning_record_parser.add_argument("--key", required=True)
+    learning_record_parser.add_argument("--value", required=True, help="JSON object text or a path to a JSON object.")
+    learning_record_parser.add_argument("--source", required=True)
+    learning_record_parser.add_argument("--confidence", required=True)
+    learning_record_parser.add_argument("--profile", default="")
+    learning_record_parser.add_argument("--project", default="")
+    learning_record_parser.add_argument("--extension-id", default="")
+    learning_record_parser.set_defaults(func=command_learning_record)
+
+    learning_list_parser = learning_subparsers.add_parser(
+        "list",
+        help="List consultative learning records with optional filters.",
+    )
+    learning_list_parser.add_argument("--scope", choices=["global", "profile", "project", "extension"], default="")
+    learning_list_parser.add_argument("--profile", default="")
+    learning_list_parser.add_argument("--project", default="")
+    learning_list_parser.add_argument("--extension-id", default="")
+    learning_list_parser.set_defaults(func=command_learning_list)
+
+    knowledge_parser = subparsers.add_parser("knowledge", help="Manage local cached Bubble manual knowledge.")
+    knowledge_subparsers = knowledge_parser.add_subparsers(dest="knowledge_command", required=True)
+
+    knowledge_refresh_parser = knowledge_subparsers.add_parser(
+        "refresh-source",
+        help="Import normalized knowledge records from a local JSONL file.",
+    )
+    knowledge_refresh_parser.add_argument("--source", required=True, help="Safe local source id, such as bubble_manual_gitbook.")
+    knowledge_refresh_parser.add_argument("--file", required=True, help="Local JSONL file to import.")
+    knowledge_refresh_parser.set_defaults(func=command_knowledge_refresh_source)
+
+    knowledge_search_parser = knowledge_subparsers.add_parser(
+        "search",
+        help="Search the local knowledge cache.",
+    )
+    knowledge_search_parser.add_argument("query")
+    knowledge_search_parser.add_argument("--limit", type=int, default=8)
+    knowledge_search_parser.set_defaults(func=command_knowledge_search)
+
+    knowledge_fetch_parser = knowledge_subparsers.add_parser(
+        "fetch",
+        help="Fetch one local knowledge record by id.",
+    )
+    knowledge_fetch_parser.add_argument("record_id")
+    knowledge_fetch_parser.set_defaults(func=command_knowledge_fetch)
+
+    knowledge_guidance_parser = knowledge_subparsers.add_parser(
+        "guidance",
+        help="Return Bubble manual guidance from the local cache only.",
+    )
+    knowledge_guidance_parser.add_argument("query")
+    knowledge_guidance_parser.add_argument("--limit", type=int, default=5)
+    knowledge_guidance_parser.set_defaults(func=command_knowledge_guidance)
+
+    tools_parser = subparsers.add_parser("tools", help="Discover the MCP tool catalog without opening the full schema.")
+    tools_subparsers = tools_parser.add_subparsers(dest="tools_command", required=True)
+
+    tools_guide_parser = tools_subparsers.add_parser(
+        "guide",
+        help="Return compact agent routing guidance for a Bubble task.",
+    )
+    tools_guide_parser.add_argument("--task", default="", help="Optional natural-language Bubble task to route.")
+    tools_guide_parser.set_defaults(func=command_tools_guide)
+
+    tools_search_parser = tools_subparsers.add_parser(
+        "search",
+        help="Search exposed MCP tools and return compact matching schemas.",
+    )
+    tools_search_parser.add_argument("--query", required=True, help="Search text such as 'html selector import'.")
+    tools_search_parser.add_argument("--limit", type=int, default=8, help="Maximum matches to return, clamped to 1-25.")
+    tools_search_parser.set_defaults(func=command_tools_search)
+
+    tools_recipe_parser = tools_subparsers.add_parser(
+        "recipe",
+        help="Return an ordered MCP tool recipe for a Bubble task.",
+    )
+    tools_recipe_parser.add_argument("--task", required=True, help="Natural-language Bubble task to route.")
+    tools_recipe_parser.add_argument("--recipe", default="", help="Optional recipe id to force.")
+    tools_recipe_parser.add_argument("--profile", default="", help="Optional profile value to include in templates.")
+    tools_recipe_parser.add_argument("--context", default="", help="Optional context/page value to include in templates.")
+    tools_recipe_parser.add_argument("--parent", default="root", help="Optional parent value to include in templates.")
+    tools_recipe_parser.add_argument("--execute", action="store_true", help="Mark the generated template as an execution path.")
+    tools_recipe_parser.set_defaults(func=command_tools_recipe)
+
+    tools_runbook_parser = tools_subparsers.add_parser(
+        "runbook",
+        help="Return one compact agent runbook with route, recipe, relevant tools, and optional profile status.",
+    )
+    tools_runbook_parser.add_argument("--task", required=True)
+    tools_runbook_parser.add_argument("--profile", default="")
+    tools_runbook_parser.add_argument("--context", default="")
+    tools_runbook_parser.add_argument("--parent", default="root")
+    tools_runbook_parser.add_argument("--execute", action="store_true")
+    tools_runbook_parser.add_argument("--search-limit", type=int, default=6)
+    tools_runbook_parser.add_argument("--include-profile-status", action="store_true")
+    tools_runbook_parser.set_defaults(func=command_tools_runbook)
+
+    tools_coverage_parser = tools_subparsers.add_parser(
+        "coverage",
+        help="Report how exposed MCP tools are executed by runtime, compiler, or native handlers.",
+    )
+    tools_coverage_parser.add_argument(
+        "--include-tools",
+        action="store_true",
+        help="Include per-tool classifications. Omitted by default to keep agent/CI output compact.",
+    )
+    tools_coverage_parser.set_defaults(func=command_tools_coverage)
+
+    tools_quality_parser = tools_subparsers.add_parser(
+        "quality",
+        help="Audit MCP catalog usability for agents, including schemas, descriptions, annotations, prompts, resources, and coverage.",
+    )
+    tools_quality_parser.set_defaults(func=command_tools_quality)
+
+    readiness_parser = subparsers.add_parser(
+        "readiness",
+        help="Run the recommended MCP readiness sequence: health, coverage quality gate, routing, and optional profile smokes.",
+    )
+    readiness_parser.add_argument("--profile", default="")
+    readiness_parser.add_argument("--context", default="index")
+    readiness_parser.add_argument("--parent", default="root")
+    readiness_parser.add_argument("--app-id", default="")
+    readiness_parser.add_argument("--app-version", default="test")
+    readiness_parser.add_argument("--max-age-hours", type=int, default=24)
+    readiness_parser.add_argument(
+        "--include-family-preview",
+        action="store_true",
+        help="Also run the broader execute=false family-preview smoke. Requires --profile for useful coverage.",
+    )
+    readiness_parser.add_argument(
+        "--include-details",
+        action="store_true",
+        help="Include full nested smoke results. Omitted by default to keep output compact.",
+    )
+    readiness_parser.add_argument("--stop-on-failure", action="store_true")
+    readiness_parser.set_defaults(func=command_readiness)
+
+    smoke_parser = subparsers.add_parser("smoke", help="Run safe runtime smoke checks.")
+    smoke_subparsers = smoke_parser.add_subparsers(dest="smoke_command", required=True)
+    runtime_smoke_parser = smoke_subparsers.add_parser(
+        "runtime",
+        help="Run MCP runtime smoke checks. Real writes require --suite execute-write --execute.",
+    )
+    runtime_smoke_parser.add_argument(
+        "--suite",
+        choices=["coverage", "agent-routing", "visual-repair", "safe-read", "preview-write", "execute-write", "family-preview"],
+        default="coverage",
+        help="Smoke suite to run. agent-routing validates natural-language tool selection without writes; visual-repair validates visual audit repair planning without writes; family-preview exercises representative tool families without writes; execute-write performs real temporary writes only when --execute is also set.",
+    )
+    runtime_smoke_parser.add_argument("--profile", default="")
+    runtime_smoke_parser.add_argument("--context", default="index")
+    runtime_smoke_parser.add_argument("--parent", default="root")
+    runtime_smoke_parser.add_argument("--app-id", default="")
+    runtime_smoke_parser.add_argument("--app-version", default="test")
+    runtime_smoke_parser.add_argument("--limit", type=int, default=0)
+    runtime_smoke_parser.add_argument("--html-url", default="")
+    runtime_smoke_parser.add_argument("--selector", default="")
+    runtime_smoke_parser.add_argument("--report", default="")
+    runtime_smoke_parser.add_argument("--include-details", action="store_true")
+    runtime_smoke_parser.add_argument("--stop-on-failure", action="store_true")
+    runtime_smoke_parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Required for --suite execute-write. Ignored by read-only and preview suites.",
+    )
+    runtime_smoke_parser.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="When used with execute-write, delete the temporary smoke page at the end.",
+    )
+    runtime_smoke_parser.add_argument(
+        "--run-id",
+        default="",
+        help="Optional suffix for temporary smoke objects. Defaults to a timestamp plus random suffix.",
+    )
+    runtime_smoke_parser.add_argument(
+        "--verify-context",
+        action="store_true",
+        help="After execute-write, refresh Bubble context and verify the temporary objects exist with expected defaults.",
+    )
+    runtime_smoke_parser.add_argument(
+        "--verification-output",
+        default="",
+        help="Optional context JSON path written by --verify-context.",
+    )
+    runtime_smoke_parser.set_defaults(func=command_smoke_runtime)
+
+    execute_plan_parser = subparsers.add_parser(
+        "execute-plan",
+        help="Execute a plan whose steps include args.write_payload.",
+    )
+    execute_plan_parser.add_argument("--profile", required=True)
+    execute_plan_parser.add_argument("--file", required=True)
+    execute_plan_parser.add_argument("--app-id", default="")
+    execute_plan_parser.add_argument("--app-version", default="test")
+    execute_plan_parser.add_argument(
+        "--context-file",
+        default="",
+        help="Optional imported Bubble context JSON used while compiling abstract steps.",
+    )
+    execute_plan_parser.add_argument(
+        "--no-auto-context",
+        action="store_true",
+        help="Disable automatic project context detection while compiling.",
+    )
+    execute_plan_parser.add_argument("--compile", action="store_true", help="Compile supported abstract steps before execution.")
+    execute_plan_parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Actually post write steps to Bubble. Without this flag the plan is previewed.",
+    )
+    execute_plan_parser.set_defaults(func=command_execute_plan)
+
+    compile_plan_parser = subparsers.add_parser(
+        "compile-plan",
+        help="Compile supported abstract plan steps into Bubble write_payload objects.",
+    )
+    compile_plan_parser.add_argument("--file", required=True)
+    compile_plan_parser.add_argument("--app-id", required=True)
+    compile_plan_parser.add_argument("--app-version", default="test")
+    compile_plan_parser.add_argument(
+        "--context-file",
+        default="",
+        help="Optional imported Bubble context JSON used to resolve internal Bubble paths.",
+    )
+    compile_plan_parser.add_argument("--output", default="")
+    compile_plan_parser.set_defaults(func=command_compile_plan)
+
+    return parser
+
+
+# UnBubble edition: the CLI is reachable by an agent through a shell, so commands that write raw
+# editor payloads, deploy, install plugins, run extension packs or the tool wizard, transfer between
+# apps or build INTO Bubble from HTML are refused before any handler runs; plan execution, visual
+# repairs and write smokes are refused when they would execute. The MCP server applies the same
+# rules through server/policy.py, and core/write_guard.py still guards every HTTP request.
+UNBUBBLE_DENIED_CLI: tuple[tuple[str, ...], ...] = (
+    ("write",),
+    ("plugin",),
+    ("browser",),
+    ("transfer",),
+    ("extension",),
+    ("tool-wizard",),
+    ("import",),
+    ("session", "import"),  # session material is captured by `session login` in a visible browser
+)
+UNBUBBLE_DENIED_CLI_EXECUTE: tuple[tuple[str, ...], ...] = (
+    ("execute-plan",),
+    ("eval", "visual-audit"),
+    ("smoke", "runtime"),
+)
+
+
+def _cli_command_path(args: argparse.Namespace) -> tuple[str, ...]:
+    first = str(getattr(args, "command", "") or "")
+    second = getattr(args, f"{first.replace('-', '_')}_command", None)
+    return (first, str(second)) if second else (first,)
+
+
+def unbubble_cli_block_reason(args: argparse.Namespace) -> str | None:
+    path = _cli_command_path(args)
+    for denied in UNBUBBLE_DENIED_CLI:
+        if path[: len(denied)] == denied:
+            return f"`{' '.join(path)}` is disabled in the UnBubble edition of the Bubble MCP CLI."
+    if getattr(args, "execute", False):
+        for denied in UNBUBBLE_DENIED_CLI_EXECUTE:
+            if path[: len(denied)] == denied:
+                return f"`{' '.join(path)} --execute` is disabled in the UnBubble edition; previews still work."
+    return None
+
+
+def main(argv: list[str] | None = None) -> int:
+    # Files the CLI writes (sessions, exports with settings.secure, contexts) stay private.
+    os.umask(0o077)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    blocked = unbubble_cli_block_reason(args)
+    if blocked:
+        emit_json({"ok": False, "error": blocked, "error_class": "WriteBlocked"})
+        return 2
+    return int(args.func(args))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

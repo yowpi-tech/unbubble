@@ -1,8 +1,8 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "unbubble",
-  "version": "1.0.0",
-  "description": "UnBubble — a 3-step pipeline to take an app OFF Bubble.io: (1) audit — find & report unused/dead entities in a .bubble export so the project can be cleaned and re-exported lean; (2) clone — reverse-engineer the lean export into full as-is technical documentation (database, external APIs, plugins, Data API, backend workflows, pages & business rules) and a clone PRD; (3) level-up — assess tech debt, design a state-of-the-art target architecture (security & reliability first), and produce the data-migration plan + AI-ready rebuild pack.",
+  "version": "1.1.0",
+  "description": "UnBubble — a 3-step pipeline to take an app OFF Bubble.io: (1) audit — find & report unused/dead entities in a .bubble export so the project can be cleaned and re-exported lean; (2) clone — reverse-engineer the lean export into full as-is technical documentation (database, external APIs, plugins, Data API, backend workflows, pages & business rules) and a clone PRD; (3) level-up — assess tech debt, design a state-of-the-art target architecture (security & reliability first), and produce the data-migration plan + AI-ready rebuild pack. Optional (4) connect — a connected mode that reads the live Bubble app through a vendored, hardened MCP server (logs, workload, changelog, fresh exports, logged-in screen captures) and applies the audit cleanup on a branch with the owner's approval; it never writes to live or deploys.",
   "author": {
     "name": "Marlon Trettin",
     "email": "marlon@yowpi.com"
