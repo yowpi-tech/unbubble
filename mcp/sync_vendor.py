@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Vendor a curated snapshot of the befree-bubble-mcp fork into mcp/befree-bubble-mcp/.
+"""Vendor a curated snapshot of the UnBubble edition of befree-bubble-mcp into mcp/befree-bubble-mcp/.
 
-    python3 mcp/sync_vendor.py                       # snapshot the fork's unbubble/hardening branch
+    python3 mcp/sync_vendor.py                       # snapshot the edition's unbubble/hardening branch
     python3 mcp/sync_vendor.py --ref <sha|branch>    # snapshot another commit
     python3 mcp/sync_vendor.py --check               # verify the vendored tree against its manifest
 
-The snapshot is an exact `git archive` of ONE commit of the fork (yowpi-tech/befree-bubble-mcp,
-checked out locally) minus the paths in EXCLUDE. Nothing is ever edited here: every change goes to
-the fork, passes its test suite, and comes back through a new sync. The manifest (VENDORED.json)
+The snapshot is an exact `git archive` of ONE commit of the edition's source repository (checked
+out locally, ~/befree-bubble-mcp by default) minus the paths in EXCLUDE. Nothing is ever edited
+here: every change goes to the source repository, passes its test suite, and comes back through a
+new sync. The manifest (VENDORED.json)
 records the commit and a sha256 per file so --check can prove the tree was not touched.
 
 stdlib only, Python 3.8+.
@@ -38,8 +39,8 @@ EXCLUDE = {
     'bridge/': 'Figma bridge (builds INTO Bubble; listened on 0.0.0.0 and wrote by default)',
     'chrome-extension/': 'Chrome capture extension (trusted every page script on *.bubbleapps.io)',
     'test-node/': 'Node tests of the excluded bridge/extension',
-    'tests/': 'test suite: it runs in the fork, against the same commit',
-    'scripts/': 'developer scripts (install_local.py re-signs binaries; audits run in the fork)',
+    'tests/': 'test suite: it runs in the source repository, against the same commit',
+    'scripts/': 'developer scripts (install_local.py re-signs binaries; audits run in the source repository)',
     'docs/superpowers/': 'agent-directed planning docs',
     '.github/': 'upstream CI configuration',
     'package.json': 'npm scripts for the excluded bridge/renderer',
@@ -81,7 +82,7 @@ def vendored_files():
 
 
 def git_ignored(paths):
-    """Vendored paths that the repository's .gitignore rules (including the fork's own nested
+    """Vendored paths that the repository's .gitignore rules (including the source repository's own nested
     .gitignore) would leave out of a commit: they would exist locally and be missing elsewhere."""
 
     repo = MCP_DIR.parent
@@ -173,7 +174,7 @@ def write_notes(manifest):
         '| | |',
         '|---|---|',
         '| Upstream | %s (MIT, Copyright (c) 2026 Befree) |' % src['upstream'],
-        '| Fork | %s |' % (src['repository'] or 'local checkout'),
+        '| Source | %s |' % (src['repository'] or 'UnBubble edition, Yowpi Tech (not published separately)'),
         '| Ref | `%s` |' % src['ref'],
         '| Commit | `%s` (%s) |' % (src['commit'], src['commit_date']),
         '| Synced | %s |' % manifest['synced_at'],
@@ -181,7 +182,7 @@ def write_notes(manifest):
         '',
         '## Rules',
         '',
-        '- **No local edits.** Every change is made in the fork, passes its test suite there',
+        '- **No local edits.** Every change is made in the source repository, passes its test suite there',
         '  (`tests/unit`, run with an isolated `BUBBLE_MCP_CONFIG_DIR`), and arrives here through',
         '  `python3 mcp/sync_vendor.py --ref <commit>`.',
         '- `python3 mcp/sync_vendor.py --check` must pass before every commit that touches `mcp/`.',
@@ -221,7 +222,7 @@ def check():
 
 def main():
     ap = argparse.ArgumentParser(description='Vendor a curated snapshot of the befree-bubble-mcp fork.')
-    ap.add_argument('--fork', type=Path, default=DEFAULT_FORK, help='local checkout of the fork')
+    ap.add_argument('--fork', type=Path, default=DEFAULT_FORK, help='local checkout of the source repository')
     ap.add_argument('--ref', default=DEFAULT_REF, help='commit or branch to snapshot')
     ap.add_argument('--check', action='store_true', help='verify the vendored tree against VENDORED.json')
     args = ap.parse_args()

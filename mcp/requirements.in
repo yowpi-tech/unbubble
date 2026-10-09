@@ -6,7 +6,7 @@ chardet==5.2.0
 charset-normalizer==3.4.6
 requests==2.34.2
 playwright==1.61.0
-# transitive dependencies, pinned to the set the fork's test suite ran with
+# transitive dependencies, pinned to the set the edition's test suite ran with
 certifi==2026.6.17
 greenlet==3.5.3
 idna==3.18

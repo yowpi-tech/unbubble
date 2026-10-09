@@ -387,8 +387,8 @@ Issues and pull requests are welcome; contributions are accepted under the Apach
   data. Reproduce with a small synthetic export or a redacted excerpt.
 - **Security problems** — report them privately to marlon@yowpi.com, not in a public issue.
 - **`mcp/befree-bubble-mcp/` is vendored and never edited here.** A change to it is made in the
-  fork, passes the fork's test suite and arrives as a new snapshot through `mcp/sync_vendor.py`
-  ([`mcp/VENDORED.md`](mcp/VENDORED.md)).
+  edition's source repository, passes its test suite there and arrives as a new snapshot through
+  `mcp/sync_vendor.py` ([`mcp/VENDORED.md`](mcp/VENDORED.md)).
 - Before opening a pull request: `python3 -m py_compile` on the scripts you touched, and
   `cd ui && npx tsc --noEmit && npx eslint src` for the console.
 
@@ -408,10 +408,10 @@ mode, and that work is Befree's.
 
 How UnBubble uses it:
 
-- `mcp/befree-bubble-mcp/` is a snapshot of the fork
-  [yowpi-tech/befree-bubble-mcp](https://github.com/yowpi-tech/befree-bubble-mcp), pinned to one
-  commit with a sha256 per file. [`mcp/VENDORED.md`](mcp/VENDORED.md) names the commit and what is
-  not shipped, and `python3 mcp/sync_vendor.py --check` proves the tree is untouched.
+- `mcp/befree-bubble-mcp/` is a snapshot of the *UnBubble edition* — befree-bubble-mcp with Yowpi
+  Tech's changes on top, kept in a source repository of its own — pinned to one commit with a
+  sha256 per file. [`mcp/VENDORED.md`](mcp/VENDORED.md) names the commit and what is not shipped,
+  and `python3 mcp/sync_vendor.py --check` proves the tree is untouched.
 - The *UnBubble edition* tightens it for an agent working on client apps during a migration: a
   fail-closed write guard (never the live version, never a deploy), a tool policy at the MCP
   boundary, broader redaction of secrets, logged-in screen captures with test users and one shared

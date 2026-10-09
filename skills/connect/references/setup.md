@@ -150,13 +150,13 @@ rm -rf ~/.unbubble/mcp                              # venv, sessions, exports �
 
 ## Updating the vendored MCP
 
-Never edit `mcp/befree-bubble-mcp/` in place. Changes land on the yowpi fork (branch
-`unbubble/hardening`, synced with upstream, PRs to Befree), then:
+Never edit `mcp/befree-bubble-mcp/` in place. Changes land in the edition's source repository
+(branch `unbubble/hardening`, synced with upstream), then:
 
 ```bash
-python3 <unbubble>/mcp/sync_vendor.py            # snapshot of the fork's pinned branch → mcp/befree-bubble-mcp
+python3 <unbubble>/mcp/sync_vendor.py            # snapshot of the edition's pinned branch → mcp/befree-bubble-mcp
 python3 <unbubble>/mcp/sync_vendor.py --check    # the tree matches VENDORED.json byte for byte
 python3 <unbubble>/mcp/install.py --register none # refresh the venv if requirements.lock changed
 ```
 
-Commit as `mcp: vendor befree-bubble-mcp @ <sha>` after the fork's full test suite passes.
+Commit as `mcp: vendor befree-bubble-mcp @ <sha>` after the edition's full test suite passes.

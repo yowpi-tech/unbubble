@@ -27,8 +27,8 @@ description: >
 > what only the live editor can answer — runtime logs and metrics, fresh exports, logged-in screen
 > captures — and lets the agent apply the audit cleanup instead of the owner deleting item by item.
 
-It drives **befree-bubble-mcp** (MIT, Befree Academy), vendored in `mcp/befree-bubble-mcp/` from the
-yowpi fork's `unbubble/hardening` branch (`mcp/VENDORED.md` has the commit and file hashes). The
+It drives **befree-bubble-mcp** (MIT, Befree Academy), vendored in `mcp/befree-bubble-mcp/` as the
+UnBubble edition, Yowpi Tech's hardened branch of it (`mcp/VENDORED.md` has the commit and file hashes). The
 server talks to Bubble's **undocumented editor endpoints** with the session cookies of a Bubble
 account. Use it only with the app owner's consent, never unattended, and expect breakage when
 Bubble changes its editor.

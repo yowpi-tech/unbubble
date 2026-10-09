@@ -6,8 +6,8 @@ an app you are migrating — download exports, read server logs, workload and th
 an audited cleanup on a branch, capture what each screen shows (also logged in, with a test user).
 
 It is a vendored, hardened snapshot of [befree-bubble-mcp](https://github.com/pedrobefree/befree-bubble-mcp)
-by Befree (MIT), taken from the fork yowpi-tech/befree-bubble-mcp. See `VENDORED.md` for the exact
-commit, what is not shipped and why.
+by Befree (MIT), with Yowpi Tech's UnBubble edition changes on top, kept in a source repository of its
+own. See `VENDORED.md` for the exact commit, what is not shipped and why.
 
 ## Files
 
@@ -15,7 +15,7 @@ commit, what is not shipped and why.
 |---|---|
 | `befree-bubble-mcp/` | the vendored source — never edited here (see `VENDORED.md`) |
 | `VENDORED.json` / `VENDORED.md` | manifest (commit, sha256 per file) and its human summary |
-| `sync_vendor.py` | refreshes the snapshot from the fork; `--check` proves the tree is untouched |
+| `sync_vendor.py` | refreshes the snapshot from the edition's source checkout; `--check` proves the tree is untouched |
 | `requirements.in` / `requirements.lock` | runtime dependencies, pinned with hashes |
 | `install.py` | private venv, dependencies (hash-checked, wheels only), Chromium, folders, host registration |
 | `launch.py` | the one entry point: `serve` (MCP stdio), `cli` (allowlisted), `doctor` |
@@ -53,7 +53,7 @@ any other MCP host can run `python3 <repo>/mcp/launch.py serve` as a stdio serve
 
 ## What the edition guarantees
 
-Enforced in code, not configuration (details in the fork's `core/write_guard.py` and
+Enforced in code, not configuration (details in the vendored `core/write_guard.py` and
 `server/policy.py`):
 
 - no deploys to live, no writes to the live version, no writes into an app other than the one the
