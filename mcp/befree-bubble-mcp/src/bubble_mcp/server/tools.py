@@ -33,7 +33,7 @@ from bubble_mcp.context.queries import context_find_payload
 from bubble_mcp.context.source import load_context, save_context
 from bubble_mcp.core.config import (
     BubbleProfile,
-    browser_profile_dir,
+    resolve_browser_profile_dir,
     load_settings,
     resolve_profile,
     save_settings,
@@ -1568,7 +1568,7 @@ def call_tool(
             editor_url=str(args.get("editor_url") or "").strip() or None,
             headless=bool(args.get("headless")),
             wait_seconds=int(args.get("wait_seconds") or DEFAULT_LOGIN_WAIT_SECONDS),
-            user_data_dir=browser_profile_dir(profile, settings.config_dir),
+            user_data_dir=resolve_browser_profile_dir(profile, settings.config_dir),
             app_version=app_version,
             progress=collect_progress,
             cancelled=cancelled,

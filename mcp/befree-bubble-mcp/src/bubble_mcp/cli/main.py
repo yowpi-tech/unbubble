@@ -6,11 +6,12 @@ import argparse
 import json
 import os
 import sys
+from urllib.parse import urlparse
 from pathlib import Path
 from typing import Any, cast
 
 from bubble_mcp.catalog_quality import catalog_quality_report
-from bubble_mcp.core.config import browser_profile_dir as safe_browser_profile_dir
+from bubble_mcp.core.config import browser_profile_dir, resolve_browser_profile_dir
 from bubble_mcp.browser_automation import (
     cancel_scheduled_deploy,
     deploy_history,
@@ -38,6 +39,7 @@ from bubble_mcp.core.config import (
     resolve_profile,
     save_settings,
     with_profile,
+    without_profile,
 )
 from bubble_mcp.execution.client import BubbleEditorClient, build_editor_write_headers
 from bubble_mcp.execution.editor_api import (
@@ -80,7 +82,9 @@ from bubble_mcp.harness.visual_audit import audit_visual_from_inputs
 from bubble_mcp.harness.app_session import (
     capture_app_session,
     ensure_logged_in_capture_allowed,
+    load_http_auth,
     resolve_app_session,
+    save_http_auth,
 )
 from bubble_mcp.harness.visual_bubble import build_bubble_preview_url, capture_bubble_visual_snapshot
 from bubble_mcp.harness.visual_capture import capture_visual_snapshot
@@ -113,6 +117,7 @@ from bubble_mcp.skills.validator import describe_skill_file, validate_skill_file
 from bubble_mcp.sessions.browser import capture_session_with_playwright
 from bubble_mcp.sessions.constants import DEFAULT_LOGIN_WAIT_SECONDS, MIN_LOGIN_WAIT_SECONDS
 from bubble_mcp.sessions.store import list_sessions, load_session, save_session, session_from_payload
+from bubble_mcp.sessions.store import session_path as session_file_path
 from bubble_mcp.tool_authoring.sessions import (
     append_capture_to_authoring_session,
     create_authoring_session,
@@ -160,9 +165,36 @@ def command_profile_add(args: argparse.Namespace) -> int:
         app_json_path=args.app_json_path or None,
         consolelog_json_path=args.consolelog_json_path or None,
         session_profile=args.session_profile or None,
+        browser_profile=args.browser_profile or None,
     )
+    if profile.browser_profile:
+        browser_profile_dir(profile.browser_profile)  # plain identifier only
     save_settings(with_profile(settings, profile))
     emit_json({"ok": True, "profile": profile.name, "app_id": profile.app_id})
+    return 0
+
+
+def command_profile_remove(args: argparse.Namespace) -> int:
+    """UnBubble edition: drop a profile (e.g. the one of a branch that was deleted). Its session file,
+    if any, stays on disk and is reported — sessions are removed by the user."""
+
+    settings = load_settings()
+    name = str(args.name or "").strip()
+    if name not in settings.profiles:
+        emit_json({"ok": False, "error": f"Profile '{name}' does not exist."})
+        return 1
+    dependents = sorted(other for other, entry in settings.profiles.items() if entry.session_profile == name)
+    if dependents and not args.force:
+        emit_json({"ok": False, "error": f"Profiles {dependents} reuse the session of '{name}'; remove them first or pass --force."})
+        return 1
+    save_settings(without_profile(settings, name))
+    session_file = session_file_path(name)
+    emit_json({
+        "ok": True,
+        "removed": name,
+        "session_file_kept": session_file.exists(),
+        "hint": f"Delete {session_file} yourself if this profile's session is no longer needed." if session_file.exists() else None,
+    })
     return 0
 
 
@@ -658,9 +690,59 @@ def command_eval_capture_visual(args: argparse.Namespace) -> int:
         output=Path(args.output) if args.output else None,
         storage_state=storage_state,
         screenshot=Path(args.screenshot) if args.screenshot else None,
+        http_credentials=load_http_auth(args.http_auth_app or args.app_session_app)
+        if (args.http_auth_app or args.app_session_app)
+        else None,
     )
     emit_json(result)
     return 0 if result.get("ok") else 1
+
+
+def command_eval_save_http_auth(args: argparse.Namespace) -> int:
+    """UnBubble edition: store the HTTP Basic credentials of an app's password-protected test version.
+    The user types them here (no echo for the password); an agent shell has no terminal and is refused."""
+
+    if not sys.stdin.isatty():
+        emit_json({"ok": False, "error": "Run this yourself in a terminal: it asks for the test version's "
+                   "username and password (they never pass through an agent)."})
+        return 2
+    url = args.url or ""
+    if not url:
+        if not args.app_id:
+            raise SystemExit("save-http-auth needs --url, or --app-id (+ --app-version) for a Bubble app.")
+        url = build_bubble_preview_url(app_id=args.app_id, app_version=args.app_version, page="index",
+                                       public_base_url=args.public_base_url or "")
+    app = args.app or args.app_id or ""
+    if not app:
+        raise SystemExit("save-http-auth needs --app (the name captures use) or --app-id.")
+    origin, challenge = _http_auth_challenge(url)
+    if not challenge:
+        print(f"[save-http-auth] {origin} did not ask for a password; saving anyway.", file=sys.stderr)
+    import getpass
+
+    username = input(f"Username for {origin}: ").strip()
+    password = getpass.getpass(f"Password for {origin} (not shown): ")
+    path = save_http_auth(app, username, password, origin=origin)
+    emit_json({"ok": True, "app": app, "origin": origin, "password_requested": challenge, "saved": str(path)})
+    return 0
+
+
+def _http_auth_challenge(url: str) -> tuple[str, bool]:
+    """Follow redirects to the page that answers and tell whether it asks for HTTP Basic auth."""
+
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(url, method="GET", headers={"User-Agent": "bubble-mcp save-http-auth"})
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310 - the user's own app URL
+            final = response.geturl()
+            challenge = False
+    except urllib.error.HTTPError as exc:
+        final = exc.geturl() or url
+        challenge = exc.code == 401 and "basic" in str(exc.headers.get("WWW-Authenticate", "")).lower()
+    parsed = urlparse(final)
+    return f"{parsed.scheme}://{parsed.netloc}", challenge
 
 
 def command_eval_capture_app_session(args: argparse.Namespace) -> int:
@@ -834,7 +916,7 @@ def command_compile_plan(args: argparse.Namespace) -> int:
 
 
 def command_session_login(args: argparse.Namespace) -> int:
-    browser_profile_dir = safe_browser_profile_dir(args.profile)
+    browser_profile_dir = resolve_browser_profile_dir(args.profile)
     settings = load_settings()
     configured_profile = settings.profiles.get(args.profile)
     app_version = args.app_version or (configured_profile.app_version if configured_profile else None)
@@ -1845,7 +1927,18 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="Reuse the session captured for another profile of the same app (e.g. a branch profile).",
     )
+    add_parser.add_argument(
+        "--browser-profile",
+        default="",
+        help="Sign in through a browser profile of its own (e.g. a dedicated collaborator per client) "
+        "instead of the shared one.",
+    )
     add_parser.set_defaults(func=command_profile_add)
+
+    remove_parser = profile_subparsers.add_parser("remove", help="Remove a profile (its session file is kept).")
+    remove_parser.add_argument("name")
+    remove_parser.add_argument("--force", action="store_true", help="Remove even if other profiles reuse its session.")
+    remove_parser.set_defaults(func=command_profile_remove)
 
     list_parser = profile_subparsers.add_parser("list", help="List configured profiles.")
     list_parser.set_defaults(func=command_profile_list)
@@ -2205,6 +2298,12 @@ def build_parser() -> argparse.ArgumentParser:
     capture_visual_parser.add_argument("--app-session-app", default="", help="App name of a stored role session.")
     capture_visual_parser.add_argument("--role", default="", help="Role whose stored session renders the page.")
     capture_visual_parser.add_argument("--screenshot", default="", help="Optional full-page PNG path.")
+    capture_visual_parser.add_argument(
+        "--http-auth-app",
+        default="",
+        help="Name whose saved HTTP credentials (eval save-http-auth) open a password-protected site; "
+        "defaults to --app-session-app.",
+    )
     capture_visual_parser.set_defaults(func=command_eval_capture_visual)
 
     capture_app_session_parser = eval_subparsers.add_parser(
@@ -2220,6 +2319,17 @@ def build_parser() -> argparse.ArgumentParser:
     capture_app_session_parser.add_argument("--public-base-url", default="")
     capture_app_session_parser.add_argument("--target", choices=["bubble", "rebuild"], default="bubble")
     capture_app_session_parser.set_defaults(func=command_eval_capture_app_session)
+
+    save_http_auth_parser = eval_subparsers.add_parser(
+        "save-http-auth",
+        help="Store the username/password of an app's password-protected test version (asked in the terminal).",
+    )
+    save_http_auth_parser.add_argument("--app", default="", help="Name captures use (default: --app-id).")
+    save_http_auth_parser.add_argument("--url", default="", help="A page of the protected version.")
+    save_http_auth_parser.add_argument("--app-id", default="", help="Bubble app id to build the URL from.")
+    save_http_auth_parser.add_argument("--app-version", default="test")
+    save_http_auth_parser.add_argument("--public-base-url", default="")
+    save_http_auth_parser.set_defaults(func=command_eval_save_http_auth)
 
     capture_bubble_visual_parser = eval_subparsers.add_parser(
         "capture-bubble-visual",

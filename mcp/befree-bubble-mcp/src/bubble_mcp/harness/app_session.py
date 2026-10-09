@@ -16,7 +16,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, cast
 from urllib.parse import urlparse
 
 from bubble_mcp.core.config import get_config_dir
@@ -97,6 +97,40 @@ def save_app_session(app: str, role: str, state: dict[str, Any], *, target: str 
     return path
 
 
+def http_auth_path(app: str) -> Path:
+    """HTTP Basic credentials of an app's protected test version (Bubble: Settings > General >
+    "Password protect development version"), kept next to the role sessions (0600)."""
+
+    return get_config_dir() / "app-sessions" / _safe(app) / ".http-auth.json"
+
+
+def save_http_auth(app: str, username: str, password: str, *, origin: str) -> Path:
+    """Store the credentials the user typed (never passed through an agent) for `origin` only."""
+
+    if not username or not password:
+        raise ValueError("Both the username and the password of the protected version are required.")
+    parsed = urlparse(origin)
+    if parsed.scheme not in ("https", "http") or not parsed.netloc:
+        raise ValueError(f"Invalid origin for HTTP credentials: {origin!r}")
+    path = http_auth_path(app)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    _write_private(path, {"username": username, "password": password, "origin": f"{parsed.scheme}://{parsed.netloc}"})
+    return path
+
+
+def load_http_auth(app: str) -> dict[str, str] | None:
+    """Playwright `http_credentials` for an app's protected version, sent to its own origin only."""
+
+    try:
+        raw = json.loads(http_auth_path(app).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict) or not raw.get("username") or not raw.get("password") or not raw.get("origin"):
+        return None
+    return {"username": str(raw["username"]), "password": str(raw["password"]), "origin": str(raw["origin"])}
+
+
 def resolve_app_session(app: str, role: str) -> tuple[Path, dict[str, Any]]:
     path = app_session_path(app, role)
     if not path.exists():
@@ -132,7 +166,9 @@ def capture_app_session(
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=False)
         try:
-            context = browser.new_context()
+            http_credentials = load_http_auth(app)
+            # a password-protected test version: the login page only shows with its credentials
+            context = browser.new_context(http_credentials=cast(Any, http_credentials)) if http_credentials else browser.new_context()
             page = context.new_page()
             page.goto(url, wait_until="domcontentloaded")
             print(

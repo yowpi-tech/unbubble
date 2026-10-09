@@ -161,6 +161,7 @@ def _capture_rendered(
     max_nodes: int,
     storage_state: str | None = None,
     screenshot: Path | None = None,
+    http_credentials: dict[str, str] | None = None,
 ) -> JsonObject:
     from playwright.sync_api import sync_playwright
 
@@ -245,10 +246,15 @@ def _capture_rendered(
             if storage_state:
                 # A per-role app session (harness/app_session.py): the page renders as that user.
                 context_options["storage_state"] = storage_state
+            if http_credentials:
+                # The app's protected test version (HTTP Basic), sent to its own origin only.
+                context_options["http_credentials"] = http_credentials
             context = browser.new_context(**context_options)
             page = context.new_page()
+            http_status: int | None = None
             if source_type == "url":
-                page.goto(source, wait_until="networkidle")
+                response = page.goto(source, wait_until="networkidle")
+                http_status = response.status if response is not None else None
             else:
                 page.set_content(html, wait_until="networkidle")
             if selector and selector_timeout_ms > 0:
@@ -291,8 +297,17 @@ def _capture_rendered(
         captured["final_url"] = final_url
         requested_path = urlparse(source).path.rstrip("/")
         final_path = urlparse(final_url).path.rstrip("/")
-        # A page the role cannot open usually redirects (to the login page or the index).
-        captured["access"] = "redirected" if final_url and final_path != requested_path else "ok"
+        captured["http_status"] = http_status
+        if http_status in (401, 407):
+            # e.g. a Bubble test version protected by a password: the page never rendered
+            captured["access"] = "auth_required"
+        elif http_status == 403:
+            captured["access"] = "forbidden"
+        elif http_status is not None and http_status >= 400:
+            captured["access"] = "http_error"
+        else:
+            # A page the role cannot open usually redirects (to the login page or the index).
+            captured["access"] = "redirected" if final_url and final_path != requested_path else "ok"
     if screenshot is not None:
         captured["screenshot"] = str(screenshot)
     return captured
@@ -312,6 +327,7 @@ def capture_visual_snapshot(
     output: Path | None = None,
     storage_state: str | None = None,
     screenshot: Path | None = None,
+    http_credentials: dict[str, str] | None = None,
 ) -> JsonObject:
     """Capture a structured visual snapshot and optionally write it to disk."""
 
@@ -334,6 +350,7 @@ def capture_visual_snapshot(
                 max_nodes=max_nodes,
                 storage_state=storage_state,
                 screenshot=screenshot,
+                http_credentials=http_credentials,
             )
         except Exception as exc:
             if not allow_raw_fallback:

@@ -31,6 +31,9 @@ class BubbleProfile:
     # profile -- and so its own export/context caches -- without a second login or a copy of the
     # cookies on disk.
     session_profile: str | None = None
+    # UnBubble edition: a browser profile of its own (e.g. a dedicated collaborator per client)
+    # instead of the shared one every profile signs in with.
+    browser_profile: str | None = None
 
 
 @dataclass(frozen=True)
@@ -62,6 +65,42 @@ def browser_profile_dir(profile: str, config_dir: Path | None = None) -> Path:
     if not SAFE_PROFILE_NAME.match(name) or ".." in name:
         raise ValueError(f"Invalid profile name for a browser profile: {profile!r}")
     return (config_dir or get_config_dir()) / "browser-profiles" / name
+
+
+SHARED_BROWSER_PROFILE = "default"
+
+
+def resolve_browser_profile_dir(profile: str, config_dir: Path | None = None) -> Path:
+    """UnBubble edition: the browser profile that holds the Bubble sign-in of an MCP profile.
+
+    Bubble signs in an account, not an app, so every profile shares one browser profile — sign in
+    (or import a signed-in profile) once and every app's session capture reuses it. A profile may
+    name its own (`browser_profile`, e.g. a dedicated collaborator per client); a branch profile
+    follows the profile whose session it reuses; a per-profile folder created before the shared
+    one existed keeps working until the shared one is there.
+    """
+
+    base = config_dir or get_config_dir()
+    name = str(profile or "").strip()
+    browser_profile_dir(name, base)  # validates the name
+    try:
+        profiles = load_settings(base).profiles
+    except Exception:
+        profiles = {}
+    seen: set[str] = set()
+    while name in profiles and name not in seen:
+        seen.add(name)
+        entry = profiles[name]
+        if entry.browser_profile:
+            return browser_profile_dir(entry.browser_profile, base)
+        if not entry.session_profile:
+            break
+        name = entry.session_profile
+    shared = browser_profile_dir(SHARED_BROWSER_PROFILE, base)
+    own = browser_profile_dir(name, base)
+    if not shared.exists() and own.exists():
+        return own
+    return shared
 
 
 def get_config_dir() -> Path:
@@ -128,6 +167,7 @@ def load_settings(config_dir: Path | None = None) -> BubbleMcpSettings:
             context_path=str(raw_profile.get("context_path") or "").strip() or None,
             crawler_index_path=str(raw_profile.get("crawler_index_path") or "").strip() or None,
             session_profile=str(raw_profile.get("session_profile") or "").strip() or None,
+            browser_profile=str(raw_profile.get("browser_profile") or "").strip() or None,
         )
 
     default_profile = str(payload.get("default_profile") or "").strip() or None
@@ -163,6 +203,7 @@ def save_settings(settings: BubbleMcpSettings) -> None:
                     else {}
                 ),
                 **({"session_profile": profile.session_profile} if profile.session_profile else {}),
+                **({"browser_profile": profile.browser_profile} if profile.browser_profile else {}),
             }
             for name, profile in sorted(settings.profiles.items())
         },
@@ -188,6 +229,14 @@ def resolve_profile(settings: BubbleMcpSettings, profile_name: str | None = None
         if normalize_profile_name(name) == target
     ]
     return matches[0] if len(matches) == 1 else None
+
+
+def without_profile(settings: BubbleMcpSettings, name: str) -> BubbleMcpSettings:
+    """UnBubble edition: return settings without a profile (its session file is left alone)."""
+
+    profiles = {key: value for key, value in settings.profiles.items() if key != name}
+    default_profile = settings.default_profile if settings.default_profile != name else None
+    return BubbleMcpSettings(config_dir=settings.config_dir, default_profile=default_profile, profiles=profiles)
 
 
 def with_profile(settings: BubbleMcpSettings, profile: BubbleProfile) -> BubbleMcpSettings:

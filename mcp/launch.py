@@ -4,6 +4,7 @@
     python3 mcp/launch.py serve          # stdio MCP server — the command agent hosts register
     python3 mcp/launch.py cli <args...>  # allowlisted CLI: login, export download, logs, captures
     python3 mcp/launch.py doctor [--json]
+    python3 mcp/launch.py import-browser-profile [--from DIR]   # reuse a browser already signed in to Bubble
 
 Every run uses the private venv created by mcp/install.py, the vendored source (no package build),
 a private config folder, umask 077, a neutral empty working directory, and remote/egress features
@@ -19,6 +20,7 @@ stdlib only, Python 3.8+.
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -47,12 +49,13 @@ PYCACHE = HOME / 'pycache'
 # by the vendored CLI and the write guard underneath.
 CLI_ALLOW = {
     ('session', 'login'), ('session', 'list'), ('session', 'inspect'),
-    ('profile', 'add'), ('profile', 'list'), ('profile', 'status'),
+    ('profile', 'add'), ('profile', 'list'), ('profile', 'status'), ('profile', 'remove'),
     ('context', 'detect'), ('context', 'inspect-bubble'), ('context', 'summary'),
     ('metrics', None), ('changelog', 'fetch'),
     ('branch', 'list'), ('branch', 'contributors'),
     ('readiness', None),
     ('eval', 'capture-app-session'), ('eval', 'capture-bubble-visual'), ('eval', 'capture-visual'),
+    ('eval', 'save-http-auth'),
 }
 DROPPED_ENV = (
     'BUBBLE_CLI_WEBHOOK_URL', 'BUBBLE_CLI_WEBHOOK_ENVELOPE_MODE', 'BUBBLE_CLI_RENDER_ENDPOINT',
@@ -225,6 +228,91 @@ def _exports():
     return out
 
 
+SHARED_BROWSER = 'default'
+# a previous install of the upstream befree-bubble-mcp keeps its signed-in browsers here
+BEFREE_BROWSERS = Path(os.environ.get('BEFREE_BUBBLE_MCP_CONFIG_DIR') or '~/.config/bubble-mcp').expanduser() / 'browser-profiles'
+
+
+def _browser_dirs(root):
+    try:
+        return sorted((p for p in root.iterdir() if p.is_dir() and (p / 'Default').is_dir()),
+                      key=_last_used, reverse=True)
+    except OSError:
+        return []
+
+
+def _last_used(path):
+    # the cookie store is written whenever the browser profile is used
+    for candidate in (path / 'Default' / 'Network' / 'Cookies', path / 'Default' / 'Cookies', path):
+        try:
+            return candidate.stat().st_mtime
+        except OSError:
+            continue
+    return 0.0
+
+
+def _pretty(path):
+    home = str(Path.home())
+    return '~' + str(path)[len(home):] if str(path).startswith(home) else str(path)
+
+
+def _browsers():
+    """Which browser profiles exist (names and last use only — nothing inside is read)."""
+    own = CONFIG / 'browser-profiles'
+    return {
+        'shared': (own / SHARED_BROWSER / 'Default').is_dir(),
+        'profiles': [p.name for p in _browser_dirs(own) if p.name != SHARED_BROWSER],
+        'importable': [_pretty(p) for p in _browser_dirs(BEFREE_BROWSERS)],
+    }
+
+
+def import_browser_profile(argv):
+    """Make a browser profile that is already signed in to Bubble — from a befree-bubble-mcp install
+    or another UnBubble profile — the shared sign-in every app's session capture opens with. It copies
+    session material, so it runs only in a terminal, with the user answering."""
+    if not sys.stdin.isatty():
+        sys.stderr.write('Run this yourself in a terminal: it copies a browser profile that is signed in '
+                         'to your Bubble account.\n')
+        return 2
+    own = CONFIG / 'browser-profiles'
+    if '--from' in argv and argv.index('--from') + 1 < len(argv):
+        candidates = [Path(argv[argv.index('--from') + 1]).expanduser().resolve()]
+    else:  # every browser that may hold the sign-in, most recently used first: the user picks
+        candidates = sorted(_browser_dirs(BEFREE_BROWSERS) + [p for p in _browser_dirs(own) if p.name != SHARED_BROWSER],
+                            key=_last_used, reverse=True)
+    candidates = [c for c in candidates if (c / 'Default').is_dir()]
+    if not candidates:
+        print('No signed-in browser profile found (looked in %s and %s).' % (_pretty(BEFREE_BROWSERS), _pretty(own)))
+        return 1
+    for number, path in enumerate(candidates, start=1):
+        used = datetime.fromtimestamp(_last_used(path)).strftime('%Y-%m-%d %H:%M')
+        print('  %d) %s  (last used %s)' % (number, _pretty(path), used))
+    answer = input('Which browser profile holds your Bubble sign-in? [1] ').strip() or '1'
+    if not answer.isdigit() or not 1 <= int(answer) <= len(candidates):
+        print('Nothing imported.')
+        return 1
+    source = candidates[int(answer) - 1]
+    target = own / SHARED_BROWSER
+    if input('Copy %s to %s? [y/N] ' % (_pretty(source), _pretty(target))).strip().lower() not in ('y', 'yes', 's', 'sim'):
+        print('Nothing imported.')
+        return 1
+    private_dir(own)
+    staging = own / (SHARED_BROWSER + '.importing')
+    shutil.rmtree(str(staging), ignore_errors=True)
+    # the Singleton* files lock a running browser to its host and process: never carry them over
+    shutil.copytree(str(source), str(staging), symlinks=True, ignore=shutil.ignore_patterns('Singleton*'))
+    if target.exists():
+        kept = own / ('%s.replaced-%s' % (SHARED_BROWSER, datetime.now().strftime('%Y%m%d-%H%M%S')))
+        target.rename(kept)
+        print('The previous shared browser profile was kept as %s (delete it when you no longer need it).'
+              % _pretty(kept))
+    staging.rename(target)
+    os.chmod(str(target), 0o700)
+    print('Imported. Every app now signs in with it: `python3 %s cli session login --profile <app-id> '
+          '--app-id <app-id>` opens already signed in and closes by itself.' % (MCP_DIR / 'launch.py'))
+    return 0
+
+
 def doctor(as_json=False):
     report = {'home': str(HOME), 'vendored': None, 'checks': []}
 
@@ -256,6 +344,7 @@ def doctor(as_json=False):
     report['hosts'] = _registered_hosts()
     report['profiles'] = _profiles()
     report['exports'] = _exports()
+    report['browsers'] = _browsers()
     report['ok'] = all(c['ok'] for c in report['checks'])
     if as_json:
         print(json.dumps(report, indent=1))
@@ -267,6 +356,13 @@ def doctor(as_json=False):
         print('  profile %-28s app=%s version=%s session=%s'
               % (profile['name'], profile['app_id'], profile['app_version'] or 'test',
                  'yes' if profile['session_captured'] else 'no'))
+    browsers = report['browsers']
+    print('  shared Bubble sign-in: %s' % ('yes' if browsers['shared'] else 'not yet'))
+    if not browsers['shared'] and (browsers['importable'] or browsers['profiles']):
+        print('  %d browser profile(s) that may already be signed in to Bubble exist (this install or befree-bubble-mcp);'
+              % (len(browsers['importable']) + len(browsers['profiles'])))
+        print('  share one sign-in across apps — run it yourself: python3 %s import-browser-profile'
+              % (MCP_DIR / 'launch.py'))
     if not report['ok']:
         print('next: python3 %s' % (MCP_DIR / 'install.py'))
     elif not report['profiles']:
@@ -294,11 +390,13 @@ def main(argv):
         run('bubble_mcp.cli.main', rest)
     if command == 'doctor':
         return doctor(as_json='--json' in rest)
+    if command == 'import-browser-profile':
+        return import_browser_profile(rest)
     if command == 'paths':
         print(json.dumps({'home': str(HOME), 'venv': str(VENV), 'config': str(CONFIG), 'exports': str(EXPORTS),
                           'work': str(WORK), 'src': str(SRC), 'launcher': str(Path(__file__).resolve())}, indent=1))
         return 0
-    sys.stderr.write('unknown command %r (serve | cli | doctor | paths)\n' % command)
+    sys.stderr.write('unknown command %r (serve | cli | doctor | paths | import-browser-profile)\n' % command)
     return 2
 
 

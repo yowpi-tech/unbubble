@@ -27,7 +27,7 @@ from bubble_mcp.context.path_api import BubblePathApiClient, PathResult, decode_
 from bubble_mcp.context.source import load_context, save_context
 from bubble_mcp.core.config import (
     BubbleProfile,
-    browser_profile_dir,
+    resolve_browser_profile_dir,
     get_config_dir,
     load_settings,
     save_settings,
@@ -739,7 +739,7 @@ def _try_capture_editor_network_index(
         attempts.append({"source": "editor_network_capture", "ok": False, "reason": f"playwright unavailable: {exc}"})
         return None
 
-    user_data_dir = browser_profile_dir(profile)
+    user_data_dir = resolve_browser_profile_dir(profile)
     if not user_data_dir.exists():
         attempts.append(
             {"source": "editor_network_capture", "ok": False, "reason": f"browser profile not found: {user_data_dir}"}
@@ -1292,7 +1292,7 @@ def _try_extract_consolelog_app(
         attempts.append({"source": "consolelog_app", "ok": False, "reason": f"playwright unavailable: {exc}"})
         return None
 
-    user_data_dir = browser_profile_dir(profile)
+    user_data_dir = resolve_browser_profile_dir(profile)
     if not user_data_dir.exists():
         attempts.append(
             {"source": "consolelog_app", "ok": False, "reason": f"browser profile not found: {user_data_dir}"}

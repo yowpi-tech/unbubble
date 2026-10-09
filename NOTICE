@@ -17,5 +17,5 @@ Third-party software
 This product includes befree-bubble-mcp (https://github.com/pedrobefree/befree-bubble-mcp),
 Copyright (c) 2026 Befree, licensed under the MIT License (see mcp/befree-bubble-mcp/LICENSE).
 It is vendored in mcp/befree-bubble-mcp/ from the fork https://github.com/yowpi-tech/befree-bubble-mcp,
-commit f3f1c7c6f6bb4644b07a837bde369659cee153cd, with modifications made in that fork (the UnBubble edition hardening) and
+commit 0191a52f4665ea29122ee72091ddb21e420d1eae, with modifications made in that fork (the UnBubble edition hardening) and
 some components not shipped; mcp/VENDORED.md lists the commit and the excluded paths.

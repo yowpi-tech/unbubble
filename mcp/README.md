@@ -29,8 +29,17 @@ python3 mcp/launch.py doctor              # check everything (--json: what the U
 ```
 
 `doctor` also lists the profiles with whether each has a session and when it was saved (file metadata
-only — it never reads session contents), the test-user roles captured for screen captures, and the
-exports downloaded per app (from their provenance sidecars).
+only — it never reads session contents), the test-user roles captured for screen captures, the
+exports downloaded per app (from their provenance sidecars), and whether the shared Bubble sign-in
+exists.
+
+All profiles sign in through one shared browser profile (`config/browser-profiles/default`), so one
+Bubble sign-in serves every app (`profile add --browser-profile <name>` keeps a client apart). A
+browser already signed in to Bubble — an earlier befree-bubble-mcp install, another profile — becomes
+the shared one with `python3 mcp/launch.py import-browser-profile`, which the user runs in a terminal
+(it copies session material; without a terminal it refuses). `cli profile remove <name>` drops a
+profile (for example a deleted branch's) and leaves session files alone; `cli eval save-http-auth`
+stores, from a terminal prompt, the password of a protected test version for screen captures.
 
 Then, once per app, **in a terminal** (a browser window opens; sign in with email, not Google):
 

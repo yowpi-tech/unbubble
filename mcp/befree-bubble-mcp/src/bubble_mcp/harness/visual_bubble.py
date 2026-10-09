@@ -7,7 +7,7 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 from bubble_mcp.core.config import load_settings, resolve_profile
-from bubble_mcp.harness.app_session import ensure_logged_in_capture_allowed, resolve_app_session
+from bubble_mcp.harness.app_session import ensure_logged_in_capture_allowed, load_http_auth, resolve_app_session
 from bubble_mcp.harness.visual_capture import capture_visual_snapshot
 
 
@@ -116,6 +116,8 @@ def capture_bubble_visual_snapshot(
         output=output,
         storage_state=storage_state,
         screenshot=screenshot,
+        # a password-protected test version (saved by `eval save-http-auth`), anonymous or logged in
+        http_credentials=load_http_auth(resolved_app_id) if resolved_app_id else None,
     )
     snapshot["bubble"] = {
         "profile": configured_profile.name if configured_profile else (profile or None),

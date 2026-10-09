@@ -27,7 +27,7 @@ from bubble_mcp.browser_automation.store import (
 from bubble_mcp.context.path_api import BubblePathApiClient, PathResult
 from bubble_mcp.core.config import load_settings, resolve_profile
 from bubble_mcp.core.redaction import redact_sensitive
-from bubble_mcp.core.config import browser_profile_dir
+from bubble_mcp.core.config import resolve_browser_profile_dir
 from bubble_mcp.core.write_guard import block_deploys
 from bubble_mcp.execution.client import BubbleEditorClient
 from bubble_mcp.execution.editor_api import BubbleEditorApiClient, deploy_app_test_and_hotfix
@@ -858,7 +858,7 @@ def _execute_scheduled_deploy_browser(record: ScheduledDeployRecord) -> dict[str
         }
 
     settings = load_settings()
-    user_data_dir = browser_profile_dir(record.profile, settings.config_dir)
+    user_data_dir = resolve_browser_profile_dir(record.profile, settings.config_dir)
     evidence = evidence_dir(record.profile, record.deploy_id)
     evidence.mkdir(parents=True, exist_ok=True)
     editor_url = _editor_url(record.app_id)
