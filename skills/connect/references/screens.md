@@ -18,6 +18,18 @@ placeholders, images with alt text, boxes) plus a full-page screenshot.
 
 ## Before capturing (the owner does this)
 
+0. **A password-protected test version** (Bubble: Settings → General → password-protect the
+   development version) answers HTTP 401 and renders nothing. The owner saves its username and
+   password once, in a terminal — they are asked there, the password without echo, and never pass
+   through the agent:
+
+   ```bash
+   python3 <unbubble>/mcp/launch.py cli eval save-http-auth --app-id <app-id> --app-version test
+   ```
+
+   They are kept owner-only next to the role sessions and sent only to the app's own origin; every
+   capture of that app — anonymous or logged in — and `capture-app-session` use them. A capture that
+   still gets a 401 is recorded as failed with this command in its error.
 1. **Test users, one per role**, created in `version-test` (or the branch) — never a real user's
    account. Roles as the app defines them (e.g. `admin`, `agent`, `customer`).
 2. **Test data that can be seen**: the screenshots show whatever the test database holds, so it

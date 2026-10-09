@@ -146,6 +146,16 @@ def main():
             snapshot = _mcp.load_json(out_json, {}) if code == 0 else {}
             status = 'ok' if code == 0 and snapshot else 'failed'
             access = snapshot.get('access') or '—'
+            http_status = snapshot.get('http_status')
+            if status == 'ok' and isinstance(http_status, int) and http_status >= 400:
+                # the page never rendered: a password-protected test version, a forbidden page...
+                status = 'failed'
+                where = ('--app-id %s --app-version %s' % (args.app, args.version) if args.target == 'bubble' else
+                         '--app %s --url %s' % (args.session_app or 'rebuild-' + args.app, args.base_url))
+                stderr = ('HTTP %d: the site asks for a password — the owner saves it once, in a terminal: '
+                          'python3 %s cli eval save-http-auth %s' % (http_status, _mcp.launcher(), where)
+                          if http_status in (401, 407) else 'HTTP %d: the page did not render' % http_status)
+                code = 1
             if status == 'ok' and args.target == 'bubble' and left_test_version(snapshot.get('final_url')):
                 access = 'left the test version'  # redirected to live: report it, never use the capture
             if status != 'ok' or access == 'left the test version':

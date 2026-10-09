@@ -70,9 +70,26 @@ python3 <unbubble>/mcp/launch.py cli session login --profile <app-id> --app-id <
 
 A Chromium window opens on the Bubble editor. Sign in with **email + password** (Google sign-in
 refuses automated browsers) and any two-factor code; the window closes as soon as the session is
-saved (default limit 10 min, `--wait-seconds`). The browser profile is kept per MCP profile, so the
-next login is usually one click. Sessions expire: when a call answers that the session is missing
-or expired, ask the user to sign in again — do not retry in a loop.
+saved (default limit 10 min, `--wait-seconds`).
+
+**One sign-in serves every app.** Bubble signs in an account, not an app, so all profiles share one
+browser profile (`browser-profiles/default`): after the first sign-in, `session login` for any other
+app opens already signed in and closes by itself in seconds. Sessions expire: when a call answers
+that the session is missing or expired, run `session login` again — usually without typing anything
+— and do not retry in a loop.
+
+**Already signed in elsewhere?** A browser profile signed in to Bubble by an earlier
+befree-bubble-mcp install (`~/.config/bubble-mcp/browser-profiles/…`) or by another UnBubble profile
+can become the shared one — the user runs it, in a terminal (it copies session material, so an
+agent shell is refused):
+
+```bash
+python3 <unbubble>/mcp/launch.py import-browser-profile     # lists the candidates by last use; you pick
+```
+
+`doctor` says when such a profile exists. To keep a client apart (a dedicated collaborator account
+per client), give its profile a browser of its own:
+`profile add <app-id> --app-id <app-id> --browser-profile <name>`.
 
 Then confirm readiness (read-only):
 
@@ -92,13 +109,20 @@ python3 <unbubble>/mcp/launch.py cli profile add <app-id>--<branch-id> --app-id 
     --app-version <branch-id> --session-profile <app-id>
 ```
 
-How the branch is created and used: `cleanup.md`.
+How the branch is created and used: `cleanup.md`. When the branch is gone, drop its profile — the
+session file of the app's own profile is left alone:
+
+```bash
+python3 <unbubble>/mcp/launch.py cli profile remove <app-id>--<branch-id>
+```
 
 ## What the launcher allows
 
-`launch.py cli` runs only: `session login|list|inspect`, `profile add|list|status`,
+`launch.py cli` runs only: `session login|list|inspect`, `profile add|list|status|remove`,
 `context detect|inspect-bubble|summary`, `metrics *`, `changelog fetch`,
-`branch list|contributors`, `readiness`, `eval capture-app-session|capture-bubble-visual|capture-visual`.
+`branch list|contributors`, `readiness`,
+`eval capture-app-session|capture-bubble-visual|capture-visual|save-http-auth`. Besides `cli`, the
+launcher has `serve`, `doctor`, `paths` and `import-browser-profile` (human, in a terminal).
 Everything else (writes, deploys, plugin installs, transfers, imports, plan execution) is refused by
 the launcher, again by the vendored CLI, and every HTTP request still passes the write guard. Writes
 happen only through MCP tool calls, under the policy and the protocol in `cleanup.md`.
@@ -109,8 +133,10 @@ Ask the owner, then remove the access the machine keeps for that app:
 
 ```bash
 python3 <unbubble>/mcp/launch.py paths     # confirm the config folder
-# in <config>: sessions/<app-id>*.json, browser-profiles/<app-id>*/, app-sessions/<app-id>/,
-# app-sessions/rebuild-<app-id>/ — delete them (the user runs the rm; never cat them)
+# in <config>: sessions/<app-id>*.json, app-sessions/<app-id>/ (role sessions and the test version's
+# password), app-sessions/rebuild-<app-id>/, and browser-profiles/<name>/ when the client had a browser
+# of its own — delete them (the user runs the rm; never cat them). browser-profiles/default is the
+# shared sign-in of every app: delete it only to sign out of Bubble on this machine.
 ```
 
 Also remove the dedicated Bubble collaborator from the app when the engagement ends.

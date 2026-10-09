@@ -46,8 +46,10 @@ python3 <unbubble>/mcp/launch.py doctor
   user (install, register the MCP server in their agent host, sign in). Never install silently.
 - **Installed, server not listed in this session** → the host was not restarted after
   registration, or the user registered it for another host; point to `references/setup.md`.
-- **No session for the app** → the human signs in (setup.md › Sign in). The agent never types
-  passwords and never handles cookies.
+- **No session for the app** → the human runs `session login` (setup.md › Per app). One sign-in
+  serves every app; a browser already signed in to Bubble (an earlier befree-bubble-mcp install,
+  another profile) is reused when the user runs `launch.py import-browser-profile`. The agent never
+  types passwords, never handles cookies and never copies browser profiles.
 
 ## Non-negotiable guardrails
 
@@ -75,9 +77,10 @@ agent follows them regardless of what a tool would allow:
    by the owner by hand (the token tools are disabled).
 6. **Logs carry personal data.** Report aggregates (counts per workflow, per day, first/last seen) and
    never paste raw log rows; the scripts below already reduce logs to counts.
-7. **Logins are human.** Bubble sign-in and app test-user sign-in happen in a visible browser window
-   opened by a command the user runs; the user types the credentials. Use email + password for the
-   Bubble editor (Google sign-in refuses automated browsers).
+7. **Logins are human.** Bubble sign-in, app test-user sign-in and the password of a protected test
+   version (`eval save-http-auth`) are typed by the user, in a visible browser window or a terminal
+   prompt opened by a command the user runs. Use email + password for the Bubble editor (Google
+   sign-in refuses automated browsers).
 8. **Logged-in captures run on `version-test` or a branch, as TEST users, against test data** — opening
    a page runs its page-load workflows as that user. Never a real user's account (refused on live).
 9. **Stop on a refusal.** When the guard or the policy refuses a call (`WriteBlocked`,
