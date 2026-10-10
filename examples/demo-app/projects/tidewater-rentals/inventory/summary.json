@@ -1,0 +1,30 @@
+{
+ "app_domain": null,
+ "generated_by": "unbubble:clone bubble_inventory.py",
+ "counts": {
+  "data_types_active": 5,
+  "data_types_deleted": 0,
+  "fields_active": 7,
+  "option_sets": 2,
+  "api_providers": 2,
+  "api_calls": 4,
+  "api_calls_used": 2,
+  "plugins_installed": 4,
+  "backend_workflows": 6,
+  "backend_exposed_endpoints": 1,
+  "backend_custom_events": 1,
+  "db_trigger_events": 1,
+  "recurring_events": 1,
+  "pages": 7,
+  "reusables": 5,
+  "data_api_exposed_types": 1
+ },
+ "security_flags": {
+  "endpoints_without_auth": [
+   "public_quote"
+  ],
+  "endpoints_ignoring_privacy_rules": [
+   "public_quote"
+  ]
+ }
+}

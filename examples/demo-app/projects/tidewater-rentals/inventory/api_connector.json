@@ -1,0 +1,64 @@
+[
+ {
+  "id": "apiSelf",
+  "name": "Tidewater API (self)",
+  "auth": null,
+  "call_count": 1,
+  "calls_used": 0,
+  "calls": [
+   {
+    "id": "cSelf01",
+    "name": "Trigger reminder",
+    "method": "POST",
+    "url": "https://tidewater-rentals.bubbleapps.io/version-live/api/1.1/wf/send_reminder",
+    "publish_as": null,
+    "body_template": null,
+    "params": [],
+    "initialized": false,
+    "used": false
+   }
+  ]
+ },
+ {
+  "id": "apiWx",
+  "name": "Weather Service (demo)",
+  "auth": null,
+  "call_count": 3,
+  "calls_used": 2,
+  "calls": [
+   {
+    "id": "cAl01",
+    "name": "Get alerts",
+    "method": "GET",
+    "url": "https://api.example.com/alerts",
+    "publish_as": null,
+    "body_template": null,
+    "params": [],
+    "initialized": false,
+    "used": false
+   },
+   {
+    "id": "cFc01",
+    "name": "Get forecast",
+    "method": "GET",
+    "url": "https://api.example.com/forecast",
+    "publish_as": null,
+    "body_template": null,
+    "params": [],
+    "initialized": false,
+    "used": true
+   },
+   {
+    "id": "cHol01",
+    "name": "Get holidays",
+    "method": "GET",
+    "url": "https://api.example.com/holidays",
+    "publish_as": null,
+    "body_template": null,
+    "params": [],
+    "initialized": false,
+    "used": true
+   }
+  ]
+ }
+]

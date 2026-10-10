@@ -138,6 +138,14 @@ The connected mode also needs its MCP server installed once — see
 cd ~/UnBubble/ui && npm install && npm run dev     # http://localhost:3333
 ```
 
+## Try it on the demo app
+
+No export at hand? `examples/demo-app/` holds the export of Tidewater Rentals, a fictional
+equipment-rental app planted so every audit section has something in use and something dead, plus
+the reports and inventories the scripts produce from it. Open
+`examples/demo-app/projects/tidewater-rentals/audit/tidewater-rentals-v1_unused_report_EN.html`, or
+point the console at it ([`examples/demo-app/README.md`](examples/demo-app/README.md)).
+
 ## Project folder
 
 All artifacts of a given app live in **one folder**, created by whichever skill touches the app
@@ -352,6 +360,7 @@ skills/
   connect/      optional connected mode · SKILL.md · references/ (setup, diagnostics, cleanup,
                 evidence, screens, cutover) · scripts/ (export download, runtime evidence, cleanup
                 plan + journal, screen captures, screen parity)
+examples/       demo-app/ — a fictional export and the outputs the scripts produce from it
 ui/             the local console (Next.js) — progress per project, embedded reports,
                 docs viewer, backlog tracking, install detection and onboarding
 mcp/            connected mode: befree-bubble-mcp by Befree (MIT), vendored as the hardened
