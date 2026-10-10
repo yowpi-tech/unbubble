@@ -1,0 +1,46 @@
+[
+ {
+  "id": "apiconnector2",
+  "version": "1.0.0",
+  "name": null,
+  "author": null,
+  "marketplace_url": null,
+  "usage_type_refs": 1,
+  "config_key_names": [],
+  "secure_key_names": [
+   "apiconnector2"
+  ]
+ },
+ {
+  "id": "1600000000001x100000000000000001",
+  "version": "2.4.0",
+  "name": "Calendar Pro (demo)",
+  "author": null,
+  "marketplace_url": "https://bubble.io/plugin/1600000000001x100000000000000001",
+  "usage_type_refs": 1,
+  "config_key_names": [],
+  "secure_key_names": []
+ },
+ {
+  "id": "1600000000002x200000000000000002",
+  "version": "1.3.0",
+  "name": "PDF Maker (demo)",
+  "author": null,
+  "marketplace_url": "https://bubble.io/plugin/1600000000002x200000000000000002",
+  "usage_type_refs": 0,
+  "config_key_names": [],
+  "secure_key_names": []
+ },
+ {
+  "id": "1600000000004x400000000000000004",
+  "version": "1.0.1",
+  "name": "SMS Gateway (demo)",
+  "author": null,
+  "marketplace_url": "https://bubble.io/plugin/1600000000004x400000000000000004",
+  "usage_type_refs": 0,
+  "config_key_names": [],
+  "secure_key_names": [
+   "1600000000004x400000000000000004_apikey"
+  ]
+ }
+]

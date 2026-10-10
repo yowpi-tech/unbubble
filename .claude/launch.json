@@ -4,9 +4,28 @@
     {
       "name": "unbubble-ui",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "cwd": "ui",
       "port": 3333
+    },
+    {
+      "name": "unbubble-ui-demo",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "UNBUBBLE_PROJECTS_DIR=../examples/demo-app/projects",
+        "UNBUBBLE_MCP_HOME=/tmp/unbubble-demo-mcp",
+        "BEFREE_BUBBLE_MCP_CONFIG_DIR=/tmp/unbubble-demo-befree",
+        "npx",
+        "next",
+        "dev",
+        "-p",
+        "3334"
+      ],
+      "cwd": "ui",
+      "port": 3334
     }
   ]
 }
