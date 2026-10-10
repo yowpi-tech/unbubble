@@ -1421,6 +1421,8 @@ STR = {
   'th_view': 'View', 'th_navs': 'Navegações para ela', 'th_wfs': 'Workflows', 'th_target': 'Destino (id)',
   'mob_disabled': 'workflow desativado', 'c_mob': 'Views mobile sem uso', 'mob_card_of': 'app nativo',
   'c_wf': 'Custom Events sem uso', 'c_wf_orphan': 'WF em elemento inexistente',
+  'c_wf_of_pages': 'páginas', 'c_wf_of_missing': 'inexistente', 'c_wf_of_hidden': 'nunca renderizado',
+  'c_ghost_of': 'plugins removidos', 'ghost_refs': 'referências',
   'method': 'Metodologia & limites', 'already_deleted': 'já deletados',
   'pages_none': 'Todas as páginas são navegadas ou referenciadas — nenhuma candidata a exclusão.',
   'reuse_none': 'Todos os elementos reutilizáveis estão em uso.',
@@ -1569,6 +1571,8 @@ STR = {
   'th_view': 'View', 'th_navs': 'Navigations to it', 'th_wfs': 'Workflows', 'th_target': 'Target (id)',
   'mob_disabled': 'workflow disabled', 'c_mob': 'Unused mobile views', 'mob_card_of': 'native app',
   'c_wf': 'Unused Custom Events', 'c_wf_orphan': 'WF on missing element',
+  'c_wf_of_pages': 'pages', 'c_wf_of_missing': 'missing', 'c_wf_of_hidden': 'never rendered',
+  'c_ghost_of': 'removed plugins', 'ghost_refs': 'references',
   'method': 'Methodology & limits', 'already_deleted': 'already deleted',
   'pages_none': 'Every page is navigated to or referenced — no deletion candidates.',
   'reuse_none': 'All reusable elements are in use.',
@@ -1961,7 +1965,7 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
                          for r in gh['refs'])
     ghost_block = ((
         f"<div class=\"note note-amber\">{T['ghost_body']}</div>"
-        f"<p><strong>{len(gh['refs'])}</strong> " + 'referências · ' + str(gh['plugin_count']) + ' plugins: '
+        f"<p><strong>{len(gh['refs'])}</strong> {T['ghost_refs']} · " + str(gh['plugin_count']) + ' plugins: '
         + ', '.join((esc(p['name'] or p['id'][:14]) + ' (' + str(p['count']) + ')') for p in gh['plugins']) + '</p>'
         f"<div class=\"filter\"><input id=\"gf\" placeholder=\"{T['filter_ghost']}\" oninput=\"fg2()\"></div>"
         f"<div class='scroll'><table id='gtab'><thead><tr><th>{T['th_plug']}</th><th>{T['th_container']}</th>"
@@ -2062,10 +2066,10 @@ tr.kept td:not(.cellchk){{font-style:italic;color:var(--dim)}}.kepttag{{display:
 <div class="card k-orange"><div class="big">{len(sty_unused)}</div><div class="lab">{T['c_sty']}</div><div class="of">{T['of']} {len(sty)}</div></div>
 <div class="card k-orange"><div class="big">{n_fcand}</div><div class="lab">{T['c_dtF']}</div><div class="of">+{n_fexp} {T['st_api']}</div></div>
 <div class="card k-red"><div class="big">{len(dtT['unused'])}</div><div class="lab">{T['c_dtT']}</div><div class="of">{T['of']} {dtT['active']} · {dtT['exposed']} API</div></div>
-<div class="card k-orange"><div class="big">{len(wf['backend_ce']) + len(wf['page_ce'])}</div><div class="lab">{T['c_wf']}</div><div class="of">{len(wf['backend_ce'])} backend + {len(wf['page_ce'])} páginas</div></div>
-<div class="card k-red"><div class="big">{len(wf['orphan']) + len(wf['hidden'])}</div><div class="lab">{T['c_wf_orphan']}</div><div class="of">{len(wf['orphan'])} inexistente + {len(wf['hidden'])} nunca renderizado</div></div>
+<div class="card k-orange"><div class="big">{len(wf['backend_ce']) + len(wf['page_ce'])}</div><div class="lab">{T['c_wf']}</div><div class="of">{len(wf['backend_ce'])} backend + {len(wf['page_ce'])} {T['c_wf_of_pages']}</div></div>
+<div class="card k-red"><div class="big">{len(wf['orphan']) + len(wf['hidden'])}</div><div class="lab">{T['c_wf_orphan']}</div><div class="of">{len(wf['orphan'])} {T['c_wf_of_missing']} + {len(wf['hidden'])} {T['c_wf_of_hidden']}</div></div>
 <div class="card k-orange"><div class="big">{len(apc['unused'])}</div><div class="lab">{T['c_api']}</div><div class="of">{T['of']} {apc['total']} · {apc['providers']} APIs</div></div>
-<div class="card k-red"><div class="big">{len(gh['refs'])}</div><div class="lab">{T['c_ghost']}</div><div class="of">{gh['plugin_count']} plugins removidos</div></div>
+<div class="card k-red"><div class="big">{len(gh['refs'])}</div><div class="lab">{T['c_ghost']}</div><div class="of">{gh['plugin_count']} {T['c_ghost_of']}</div></div>
 </div>
 
 {sech('p', T['s_pages'])}<p class="q">{T['q_pages']}</p>
