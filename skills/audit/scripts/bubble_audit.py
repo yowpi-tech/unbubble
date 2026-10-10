@@ -112,7 +112,7 @@ def editor_name(el, fallback=None, def_names=None):
       1. Reusable-element INSTANCE (type CustomElement) -> the reusable's CURRENT
          name via `properties.custom_id` (+ the frozen instance letter). Its baked
          default_name/name/custom_definition_name all snapshot at placement and go
-         STALE when the definition is renamed (463/1442 instances here have a stale
+         STALE when the definition is renamed (a large share of instances carry a stale
          default_name; `name` is stale for most too), so the live definition is the
          only reliable label. Drops genuine per-instance renames (a small minority,
          string-indistinguishable from stale auto-names).
