@@ -1,0 +1,182 @@
+[
+ {
+  "key": "aw_arch",
+  "id": "aArch01",
+  "kind": "APIEvent",
+  "name": "archive_old_orders",
+  "folder": null,
+  "expose": false,
+  "method": null,
+  "auth_not_required": false,
+  "ignore_privacy_rules": false,
+  "has_condition": false,
+  "return_200_if_not_run": false,
+  "parameters": [],
+  "actions": [],
+  "schedules_workflows": [],
+  "scheduled_by": [
+   "backend:sync_inventory_v1"
+  ]
+ },
+ {
+  "key": "aw_pay",
+  "id": "aPay01",
+  "kind": "APIEvent",
+  "name": "payment_webhook",
+  "folder": null,
+  "expose": false,
+  "method": null,
+  "auth_not_required": false,
+  "ignore_privacy_rules": false,
+  "has_condition": false,
+  "return_200_if_not_run": false,
+  "parameters": [],
+  "actions": [],
+  "schedules_workflows": [],
+  "scheduled_by": []
+ },
+ {
+  "key": "aw_quote",
+  "id": "aQuote01",
+  "kind": "APIEvent",
+  "name": "public_quote",
+  "folder": null,
+  "expose": true,
+  "method": null,
+  "auth_not_required": true,
+  "ignore_privacy_rules": true,
+  "has_condition": false,
+  "return_200_if_not_run": false,
+  "parameters": [
+   {
+    "key": "days",
+    "type": "number"
+   }
+  ],
+  "actions": [],
+  "schedules_workflows": [],
+  "scheduled_by": []
+ },
+ {
+  "key": "aw_rem",
+  "id": "aRem01",
+  "kind": "APIEvent",
+  "name": "send_reminder",
+  "folder": "Operations",
+  "expose": false,
+  "method": null,
+  "auth_not_required": false,
+  "ignore_privacy_rules": false,
+  "has_condition": false,
+  "return_200_if_not_run": false,
+  "parameters": [],
+  "actions": [],
+  "schedules_workflows": [],
+  "scheduled_by": [
+   "page:index"
+  ]
+ },
+ {
+  "key": "aw_sync",
+  "id": "aSync01",
+  "kind": "APIEvent",
+  "name": "sync_inventory_v1",
+  "folder": "Operations",
+  "expose": false,
+  "method": null,
+  "auth_not_required": false,
+  "ignore_privacy_rules": false,
+  "has_condition": false,
+  "return_200_if_not_run": false,
+  "parameters": [],
+  "actions": [
+   {
+    "order": "0",
+    "type": "ScheduleAPIEvent",
+    "has_condition": false
+   }
+  ],
+  "schedules_workflows": [
+   "aArch01"
+  ],
+  "scheduled_by": []
+ },
+ {
+  "key": "aw_avail",
+  "id": "aAvail01",
+  "kind": "APIEvent",
+  "name": "update_availability",
+  "folder": null,
+  "expose": false,
+  "method": null,
+  "auth_not_required": false,
+  "ignore_privacy_rules": false,
+  "has_condition": false,
+  "return_200_if_not_run": false,
+  "parameters": [],
+  "actions": [],
+  "schedules_workflows": [],
+  "scheduled_by": [
+   "backend:on_order_change"
+  ]
+ },
+ {
+  "key": "aw_ce",
+  "id": "aCe01",
+  "kind": "CustomEvent",
+  "name": "recompute_rates",
+  "folder": null,
+  "expose": false,
+  "method": null,
+  "auth_not_required": false,
+  "ignore_privacy_rules": false,
+  "has_condition": false,
+  "return_200_if_not_run": false,
+  "parameters": [],
+  "actions": [],
+  "schedules_workflows": [],
+  "scheduled_by": []
+ },
+ {
+  "key": "aw_trig",
+  "id": "aTrig01",
+  "kind": "DatabaseTriggerEvent",
+  "name": "on_order_change",
+  "folder": null,
+  "expose": false,
+  "method": null,
+  "auth_not_required": false,
+  "ignore_privacy_rules": false,
+  "has_condition": false,
+  "return_200_if_not_run": false,
+  "parameters": [],
+  "actions": [
+   {
+    "order": "0",
+    "type": "ScheduleAPIEvent",
+    "has_condition": false
+   }
+  ],
+  "schedules_workflows": [
+   "aAvail01"
+  ],
+  "scheduled_by": []
+ },
+ {
+  "key": "aw_night",
+  "id": "aNight01",
+  "kind": "RecurringEvent",
+  "name": "nightly_cleanup",
+  "folder": null,
+  "expose": false,
+  "method": null,
+  "auth_not_required": false,
+  "ignore_privacy_rules": false,
+  "has_condition": false,
+  "return_200_if_not_run": false,
+  "parameters": [],
+  "actions": [],
+  "schedules_workflows": [],
+  "scheduled_by": []
+ }
+]

@@ -1,0 +1,124 @@
+{
+ "types": [
+  {
+   "key": "activity_log",
+   "display": "Activity log",
+   "exposed_api": true,
+   "deleted": false,
+   "privacy_rules": {},
+   "field_count_active": 1,
+   "fields": [
+    {
+     "key": "event_text",
+     "display": "Event",
+     "type": "text",
+     "is_list": false,
+     "ref": null,
+     "deleted": false
+    }
+   ]
+  },
+  {
+   "key": "equipment_unit",
+   "display": "Equipment unit",
+   "exposed_api": false,
+   "deleted": false,
+   "privacy_rules": {},
+   "field_count_active": 1,
+   "fields": [
+    {
+     "key": "name_text",
+     "display": "Name",
+     "type": "text",
+     "is_list": false,
+     "ref": null,
+     "deleted": false
+    }
+   ]
+  },
+  {
+   "key": "legacy_invoice",
+   "display": "Legacy invoice",
+   "exposed_api": false,
+   "deleted": false,
+   "privacy_rules": {},
+   "field_count_active": 1,
+   "fields": [
+    {
+     "key": "amount_number",
+     "display": "Amount",
+     "type": "number",
+     "is_list": false,
+     "ref": null,
+     "deleted": false
+    }
+   ]
+  },
+  {
+   "key": "rental_order",
+   "display": "Rental order",
+   "exposed_api": false,
+   "deleted": false,
+   "privacy_rules": {},
+   "field_count_active": 3,
+   "fields": [
+    {
+     "key": "equipment_custom_equipment_unit",
+     "display": "Equipment",
+     "type": "custom.equipment_unit",
+     "is_list": false,
+     "ref": {
+      "kind": "table",
+      "target": "equipment_unit"
+     },
+     "deleted": false
+    },
+    {
+     "key": "internal_memo_text",
+     "display": "Internal memo",
+     "type": "text",
+     "is_list": false,
+     "ref": null,
+     "deleted": false
+    },
+    {
+     "key": "status_option_booking_status",
+     "display": "Status",
+     "type": "option.booking_status",
+     "is_list": false,
+     "ref": {
+      "kind": "option_set",
+      "target": "booking_status"
+     },
+     "deleted": false
+    }
+   ]
+  },
+  {
+   "key": "user",
+   "display": "User",
+   "exposed_api": false,
+   "deleted": false,
+   "privacy_rules": {},
+   "field_count_active": 1,
+   "fields": [
+    {
+     "key": "full_name_text",
+     "display": "Full name",
+     "type": "text",
+     "is_list": false,
+     "ref": null,
+     "deleted": false
+    }
+   ]
+  }
+ ],
+ "relationships": [
+  {
+   "from": "rental_order",
+   "field": "Equipment",
+   "to": "equipment_unit",
+   "is_list": false
+  }
+ ]
+}

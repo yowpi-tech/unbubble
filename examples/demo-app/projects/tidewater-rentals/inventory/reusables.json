@@ -1,0 +1,82 @@
+[
+ {
+  "key": "dw_bkc",
+  "id": "dBkc01",
+  "name": "BookingCard",
+  "placed_instances": 1,
+  "element_count": 1,
+  "elements_by_type": {
+   "Text": 1
+  },
+  "workflow_count": 0,
+  "workflows": [],
+  "reusables_used": {},
+  "plugin_ids_used": {},
+  "api_calls_used": [],
+  "navigates_to": []
+ },
+ {
+  "key": "dw_hdr",
+  "id": "dHdr01",
+  "name": "Header",
+  "placed_instances": 2,
+  "element_count": 1,
+  "elements_by_type": {
+   "Link": 1
+  },
+  "workflow_count": 0,
+  "workflows": [],
+  "reusables_used": {},
+  "plugin_ids_used": {},
+  "api_calls_used": [],
+  "navigates_to": [
+   "dashboard"
+  ]
+ },
+ {
+  "key": "dw_hdr_copy",
+  "id": "dHdr02",
+  "name": "Header",
+  "placed_instances": 0,
+  "element_count": 0,
+  "elements_by_type": {},
+  "workflow_count": 0,
+  "workflows": [],
+  "reusables_used": {},
+  "plugin_ids_used": {},
+  "api_calls_used": [],
+  "navigates_to": []
+ },
+ {
+  "key": "dw_foot",
+  "id": "dFoot01",
+  "name": "OldFooter",
+  "placed_instances": 0,
+  "element_count": 1,
+  "elements_by_type": {
+   "CustomElement": 1
+  },
+  "workflow_count": 0,
+  "workflows": [],
+  "reusables_used": {
+   "PromoBanner": 1
+  },
+  "plugin_ids_used": {},
+  "api_calls_used": [],
+  "navigates_to": []
+ },
+ {
+  "key": "dw_prm",
+  "id": "dPrm01",
+  "name": "PromoBanner",
+  "placed_instances": 1,
+  "element_count": 0,
+  "elements_by_type": {},
+  "workflow_count": 0,
+  "workflows": [],
+  "reusables_used": {},
+  "plugin_ids_used": {},
+  "api_calls_used": [],
+  "navigates_to": []
+ }
+]

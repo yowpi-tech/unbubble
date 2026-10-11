@@ -1,0 +1,375 @@
+{
+ "app": "tidewater-rentals",
+ "summary_version": 2,
+ "export_integrity": {
+  "reusable_definitions": 5,
+  "indexed_definitions": 0,
+  "missing_payload": 0,
+  "hollow_payload": 0,
+  "incomplete": false,
+  "sample": []
+ },
+ "provenance": null,
+ "pages": {
+  "total": 7,
+  "no_internal_nav": 3,
+  "unused": [
+   {
+    "name": "admin_legacy",
+    "inner_id": "pAdm01",
+    "key": "page:pAdm01"
+   },
+   {
+    "name": "promo_2023_old",
+    "inner_id": "pPromo23",
+    "key": "page:pPromo23"
+   }
+  ],
+  "referenced_by_url": [
+   {
+    "name": "oauth_return",
+    "inner_id": "pOauth01",
+    "key": "page:pOauth01",
+    "hits": 1,
+    "evidence": "https://tidewater-rentals.bubbleapps.io/version-live/oauth_return"
+   }
+  ],
+  "dynamic_nav": {
+   "dynamic_page_name": 0,
+   "ListGoToPage": 0
+  }
+ },
+ "reusables": {
+  "total": 5,
+  "unused_hard": [
+   {
+    "name": "OldFooter",
+    "inner_id": "dFoot01",
+    "key": "reusable:dFoot01"
+   }
+  ],
+  "unused_transitive": [
+   {
+    "name": "PromoBanner",
+    "inner_id": "dPrm01",
+    "key": "reusable:dPrm01"
+   }
+  ],
+  "duplicate_name": [
+   {
+    "name": "Header",
+    "inner_id": "dHdr02",
+    "key": "reusable:dHdr02",
+    "used_twin": "dHdr01"
+   }
+  ]
+ },
+ "backend": {
+  "total_apievents": 6,
+  "exposed": 1,
+  "unused_hard": [
+   {
+    "wf_name": "sync_inventory_v1",
+    "inner_id": "aSync01",
+    "folder": "Operations",
+    "key": "workflow:aSync01"
+   }
+  ],
+  "unused_transitive": [
+   {
+    "wf_name": "archive_old_orders",
+    "inner_id": "aArch01",
+    "folder": "(no folder)",
+    "key": "workflow:aArch01"
+   }
+  ],
+  "webhook_verify": [
+   {
+    "wf_name": "payment_webhook",
+    "inner_id": "aPay01",
+    "folder": "(no folder)",
+    "key": "workflow:aPay01",
+    "expose": false,
+    "initialized": true
+   }
+  ]
+ },
+ "option_sets": {
+  "total": 2,
+  "unused": [
+   {
+    "name": "legacy_tier",
+    "display": "Legacy tier",
+    "key": "optionset:legacy_tier"
+   }
+  ]
+ },
+ "plugins": {
+  "total": 4,
+  "used_with_ui": 2,
+  "orphaned": [
+   {
+    "id": "1600000000002x200000000000000002",
+    "version": "1.3.0",
+    "name": "PDF Maker (demo)",
+    "author": "",
+    "url": "https://bubble.io/plugin/1600000000002x200000000000000002",
+    "delisted": false,
+    "paid": true,
+    "price": "$12/mo (demo)",
+    "pricing_model": "subscription",
+    "occ": 1,
+    "config_keys": 0,
+    "headless": false,
+    "reason": "only in install registry (1 occ)",
+    "key": "plugin:1600000000002x200000000000000002"
+   }
+  ],
+  "configured_no_ui": [
+   {
+    "id": "1600000000004x400000000000000004",
+    "version": "1.0.1",
+    "name": "SMS Gateway (demo)",
+    "author": "",
+    "url": "https://bubble.io/plugin/1600000000004x400000000000000004",
+    "delisted": false,
+    "paid": false,
+    "price": "",
+    "pricing_model": "",
+    "occ": 2,
+    "config_keys": 1,
+    "headless": false,
+    "reason": "has 1 configured setting(s)",
+    "key": "plugin:1600000000004x400000000000000004"
+   }
+  ],
+  "in_use": [
+   {
+    "id": "apiconnector2",
+    "version": "1.0.0",
+    "name": "API Connector",
+    "author": "Bubble",
+    "url": "",
+    "delisted": false,
+    "paid": false,
+    "price": "",
+    "pricing_model": "",
+    "type_usages": 1
+   },
+   {
+    "id": "1600000000001x100000000000000001",
+    "version": "2.4.0",
+    "name": "Calendar Pro (demo)",
+    "author": "",
+    "url": "https://bubble.io/plugin/1600000000001x100000000000000001",
+    "delisted": false,
+    "paid": false,
+    "price": "",
+    "pricing_model": "",
+    "type_usages": 1
+   }
+  ],
+  "unused_paid": [
+   {
+    "id": "1600000000002x200000000000000002",
+    "name": "PDF Maker (demo)",
+    "price": "$12/mo (demo)",
+    "key": "plugin:1600000000002x200000000000000002",
+    "model": "subscription"
+   }
+  ]
+ },
+ "styles": {
+  "total": 3,
+  "unused": [
+   {
+    "id": "sLegacyBan",
+    "display": "Legacy Banner",
+    "type": "Group",
+    "key": "style:sLegacyBan"
+   }
+  ]
+ },
+ "variables": {
+  "colors": {
+   "active": 2,
+   "deleted": 0,
+   "unused": [
+    {
+     "id": "tkLegacy",
+     "name": "Legacy Accent",
+     "extra": "rgba(200,120,40,1)",
+     "key": "colorvar:tkLegacy"
+    }
+   ]
+  },
+  "fonts": {
+   "active": 2,
+   "deleted": 0,
+   "unused": [
+    {
+     "id": "fnDisplay",
+     "name": "Old Display",
+     "extra": "Lobster",
+     "key": "fontvar:fnDisplay"
+    }
+   ]
+  }
+ },
+ "data_tables": {
+  "active": 5,
+  "exposed_data_api": 1,
+  "deleted": 0,
+  "unused": [
+   {
+    "type_key": "legacy_invoice",
+    "display": "Legacy invoice",
+    "active_fields": 1,
+    "ref": 0,
+    "exposed": false,
+    "key": "datatype:legacy_invoice"
+   }
+  ]
+ },
+ "data_fields": {
+  "active": 7,
+  "deleted": 0,
+  "exposed_data_api_only": 1,
+  "referenced_in_script": 0,
+  "unused": [
+   {
+    "type_key": "legacy_invoice",
+    "type_display": "Legacy invoice",
+    "field_key": "amount_number",
+    "display": "Amount",
+    "ftype": "number",
+    "exposed": false,
+    "shared": false,
+    "key": "field:legacy_invoice.amount_number"
+   },
+   {
+    "type_key": "rental_order",
+    "type_display": "Rental order",
+    "field_key": "internal_memo_text",
+    "display": "Internal memo",
+    "ftype": "text",
+    "exposed": false,
+    "shared": false,
+    "key": "field:rental_order.internal_memo_text"
+   }
+  ],
+  "exposed_verify": [
+   {
+    "type_key": "activity_log",
+    "type_display": "Activity log",
+    "field_key": "event_text",
+    "display": "Event",
+    "ftype": "text",
+    "exposed": true,
+    "shared": false,
+    "key": "field:activity_log.event_text"
+   }
+  ]
+ },
+ "mobile_views": {
+  "total": 0,
+  "unused": [],
+  "duplicate_name": [],
+  "system_roles": [],
+  "broken_navigations": []
+ },
+ "workflow_audit": {
+  "backend_custom_events_uncalled": [
+   {
+    "id": "aCe01",
+    "name": "recompute_rates",
+    "folder": null,
+    "key": "customevent:aCe01",
+    "scope": "backend"
+   }
+  ],
+  "page_custom_events_uncalled": [
+   {
+    "id": "wCe02",
+    "name": "legacy_refresh",
+    "container": "index",
+    "kind": "page",
+    "key": "customevent:wCe02",
+    "scope": "page"
+   }
+  ],
+  "triggers_on_missing_element": [
+   {
+    "id": "wIdx03",
+    "trigger": "ButtonClicked",
+    "container": "index",
+    "kind": "page",
+    "element_id": "eGone77",
+    "moved_to": null,
+    "moved_to_kind": null,
+    "key": "pagewf:wIdx03"
+   }
+  ],
+  "triggers_on_hidden_element_leads": [
+   {
+    "id": "wIdx02",
+    "trigger": "ButtonClicked",
+    "container": "index",
+    "kind": "page",
+    "element_id": "eBtn09",
+    "element": "Button Claim spring discount",
+    "reason": "ancestor",
+    "blocker": "Group B",
+    "blocker_id": "eGrp09",
+    "key": "hiddenwf:wIdx02"
+   }
+  ]
+ },
+ "api_connector": {
+  "total_calls": 4,
+  "used": 2,
+  "providers": 2,
+  "unused": [
+   {
+    "provider": "Tidewater API (self)",
+    "call": "Trigger reminder",
+    "ref": "apiSelf.cSelf01",
+    "method": "POST",
+    "self_wf": "send_reminder",
+    "key": "apicall:apiSelf.cSelf01"
+   },
+   {
+    "provider": "Weather Service (demo)",
+    "call": "Get alerts",
+    "ref": "apiWx.cAl01",
+    "method": "GET",
+    "self_wf": null,
+    "key": "apicall:apiWx.cAl01"
+   }
+  ]
+ },
+ "removed_plugin_refs": {
+  "total": 1,
+  "plugin_count": 1,
+  "plugins": [
+   {
+    "id": "1600000000003x300000000000000003",
+    "name": "Chart Studio (demo)",
+    "count": 1,
+    "url": "https://bubble.io/plugin/1600000000003x300000000000000003"
+   }
+  ],
+  "refs": [
+   {
+    "plugin_id": "1600000000003x300000000000000003",
+    "container": "index",
+    "kind": "page",
+    "where": "element",
+    "location": "LineChart A",
+    "plugin_name": "Chart Studio (demo)",
+    "url": "https://bubble.io/plugin/1600000000003x300000000000000003",
+    "key": "ghostref:1600000000003x300000000000000003:index:LineChart A"
+   }
+  ]
+ }
+}

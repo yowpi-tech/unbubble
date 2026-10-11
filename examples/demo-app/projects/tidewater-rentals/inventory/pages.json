@@ -1,0 +1,181 @@
+[
+ {
+  "key": "pw_404",
+  "id": "p404",
+  "name": "404",
+  "title": "404",
+  "content_type": null,
+  "element_count": 0,
+  "elements_by_type": {},
+  "workflow_count": 0,
+  "workflows": [],
+  "reusables_used": {},
+  "plugin_ids_used": {},
+  "api_calls_used": [],
+  "navigates_to": []
+ },
+ {
+  "key": "pw_admin",
+  "id": "pAdm01",
+  "name": "admin_legacy",
+  "title": "admin_legacy",
+  "content_type": null,
+  "element_count": 1,
+  "elements_by_type": {
+   "Button": 1
+  },
+  "workflow_count": 0,
+  "workflows": [],
+  "reusables_used": {},
+  "plugin_ids_used": {},
+  "api_calls_used": [],
+  "navigates_to": []
+ },
+ {
+  "key": "pw_book",
+  "id": "pBook01",
+  "name": "booking",
+  "title": "booking",
+  "content_type": null,
+  "element_count": 2,
+  "elements_by_type": {
+   "CustomElement": 1,
+   "Dropdown": 1
+  },
+  "workflow_count": 0,
+  "workflows": [],
+  "reusables_used": {
+   "BookingCard": 1
+  },
+  "plugin_ids_used": {},
+  "api_calls_used": [],
+  "navigates_to": []
+ },
+ {
+  "key": "pw_dash",
+  "id": "pDash01",
+  "name": "dashboard",
+  "title": "dashboard",
+  "content_type": null,
+  "element_count": 4,
+  "elements_by_type": {
+   "CustomElement": 1,
+   "Link": 1,
+   "RepeatingGroup": 1,
+   "Text": 1
+  },
+  "workflow_count": 1,
+  "workflows": [
+   {
+    "trigger": "PageLoaded",
+    "on": null,
+    "has_condition": false,
+    "action_types": [
+     "apiconnector2-apiWx.cFc01"
+    ]
+   }
+  ],
+  "reusables_used": {
+   "Header": 1
+  },
+  "plugin_ids_used": {},
+  "api_calls_used": [
+   "apiWx.cFc01"
+  ],
+  "navigates_to": []
+ },
+ {
+  "key": "pw_index",
+  "id": "pIdx01",
+  "name": "index",
+  "title": "index",
+  "content_type": null,
+  "element_count": 7,
+  "elements_by_type": {
+   "Button": 2,
+   "CustomElement": 1,
+   "Text": 1,
+   "Group": 1,
+   "1600000000001x100000000000000001-CalendarPicker": 1,
+   "1600000000003x300000000000000003-LineChart": 1
+  },
+  "workflow_count": 5,
+  "workflows": [
+   {
+    "trigger": "ButtonClicked",
+    "on": "Button Book equipment",
+    "has_condition": false,
+    "action_types": [
+     "ChangePage",
+     "ScheduleAPIEvent",
+     "TriggerCustomEvent"
+    ]
+   },
+   {
+    "trigger": "ButtonClicked",
+    "on": "Button Claim spring discount",
+    "has_condition": false,
+    "action_types": []
+   },
+   {
+    "trigger": "ButtonClicked",
+    "on": "eGone77",
+    "has_condition": false,
+    "action_types": []
+   },
+   {
+    "trigger": "CustomEvent",
+    "on": "recalc_totals",
+    "has_condition": false,
+    "action_types": []
+   },
+   {
+    "trigger": "CustomEvent",
+    "on": "legacy_refresh",
+    "has_condition": false,
+    "action_types": []
+   }
+  ],
+  "reusables_used": {
+   "Header": 1
+  },
+  "plugin_ids_used": {
+   "Calendar Pro (demo)": 2,
+   "Chart Studio (demo)": 2
+  },
+  "api_calls_used": [],
+  "navigates_to": [
+   "booking"
+  ]
+ },
+ {
+  "key": "pw_oauth",
+  "id": "pOauth01",
+  "name": "oauth_return",
+  "title": "oauth_return",
+  "content_type": null,
+  "element_count": 0,
+  "elements_by_type": {},
+  "workflow_count": 0,
+  "workflows": [],
+  "reusables_used": {},
+  "plugin_ids_used": {},
+  "api_calls_used": [],
+  "navigates_to": []
+ },
+ {
+  "key": "pw_promo",
+  "id": "pPromo23",
+  "name": "promo_2023_old",
+  "title": "promo_2023_old",
+  "content_type": null,
+  "element_count": 0,
+  "elements_by_type": {},
+  "workflow_count": 0,
+  "workflows": [],
+  "reusables_used": {},
+  "plugin_ids_used": {},
+  "api_calls_used": [],
+  "navigates_to": []
+ }
+]

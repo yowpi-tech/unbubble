@@ -1,0 +1,31 @@
+[
+ {
+  "key": "booking_status",
+  "display": "Booking status",
+  "deleted": false,
+  "options": [
+   {
+    "display": "Reserved",
+    "db_value": "reserved",
+    "sort": 1
+   },
+   {
+    "display": "Returned",
+    "db_value": "returned",
+    "sort": 2
+   }
+  ]
+ },
+ {
+  "key": "legacy_tier",
+  "display": "Legacy tier",
+  "deleted": false,
+  "options": [
+   {
+    "display": "Gold",
+    "db_value": "gold",
+    "sort": 1
+   }
+  ]
+ }
+]

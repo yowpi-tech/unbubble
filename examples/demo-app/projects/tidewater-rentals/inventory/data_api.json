@@ -1,0 +1,12 @@
+{
+ "data_api_enabled (exposes_get_api)": false,
+ "workflow_api_enabled (exposes_wf_api)": true,
+ "swagger_hidden (hide_swagger_api)": false,
+ "exposed_types": [
+  {
+   "key": "activity_log",
+   "display": "Activity log"
+  }
+ ],
+ "note": "Data API root: https://<domain>/api/1.1/obj/<type> ; Workflow API root: https://<domain>/api/1.1/wf/<endpoint>. Per-type allowed operations are governed by privacy rules (see database.json privacy_rules) and API tokens. The tokens themselves live in settings.secure.api_tokens and are preserved by bubble_secrets.py into <workdir>/secrets/.env (BUBBLE_API_TOKEN_*)."
+}

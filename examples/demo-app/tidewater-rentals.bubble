@@ -1,0 +1,675 @@
+{
+ "_id": "tidewater-rentals",
+ "api": {
+  "aw_arch": {
+   "actions": {},
+   "id": "aArch01",
+   "properties": {
+    "expose": false,
+    "wf_name": "archive_old_orders"
+   },
+   "type": "APIEvent"
+  },
+  "aw_avail": {
+   "actions": {},
+   "id": "aAvail01",
+   "properties": {
+    "expose": false,
+    "wf_name": "update_availability"
+   },
+   "type": "APIEvent"
+  },
+  "aw_ce": {
+   "actions": {},
+   "id": "aCe01",
+   "properties": {
+    "event_name": "recompute_rates"
+   },
+   "type": "CustomEvent"
+  },
+  "aw_night": {
+   "actions": {},
+   "id": "aNight01",
+   "properties": {
+    "wf_name": "nightly_cleanup"
+   },
+   "type": "RecurringEvent"
+  },
+  "aw_pay": {
+   "actions": {},
+   "id": "aPay01",
+   "properties": {
+    "expose": false,
+    "parameter_def": "auto",
+    "raw_data": "{\"event\": \"demo.payment\", \"amount\": 100}",
+    "wf_name": "payment_webhook"
+   },
+   "type": "APIEvent"
+  },
+  "aw_quote": {
+   "actions": {},
+   "id": "aQuote01",
+   "properties": {
+    "auth_unecessary": true,
+    "ignore_privacy_rules": true,
+    "parameters": {
+     "0": {
+      "key": "days",
+      "value": "number"
+     }
+    },
+    "wf_name": "public_quote"
+   },
+   "type": "APIEvent"
+  },
+  "aw_rem": {
+   "actions": {},
+   "id": "aRem01",
+   "properties": {
+    "expose": false,
+    "wf_folder": "fOps",
+    "wf_name": "send_reminder"
+   },
+   "type": "APIEvent"
+  },
+  "aw_sync": {
+   "actions": {
+    "0": {
+     "properties": {
+      "api_event": "aArch01"
+     },
+     "type": "ScheduleAPIEvent"
+    }
+   },
+   "id": "aSync01",
+   "properties": {
+    "expose": false,
+    "wf_folder": "fOps",
+    "wf_name": "sync_inventory_v1"
+   },
+   "type": "APIEvent"
+  },
+  "aw_trig": {
+   "actions": {
+    "0": {
+     "properties": {
+      "api_event": "aAvail01"
+     },
+     "type": "ScheduleAPIEvent"
+    }
+   },
+   "id": "aTrig01",
+   "properties": {
+    "trigger_type": "custom.rental_order",
+    "wf_name": "on_order_change"
+   },
+   "type": "DatabaseTriggerEvent"
+  }
+ },
+ "element_definitions": {
+  "dw_bkc": {
+   "elements": {
+    "e1": {
+     "default_name": "Text A",
+     "id": "eTxt10",
+     "properties": {
+      "expr": {
+       "field": "name_text"
+      },
+      "source": "custom.equipment_unit",
+      "text": {
+       "entries": {
+        "0": "Equipment"
+       }
+      },
+      "via": {
+       "field": "equipment_custom_equipment_unit"
+      }
+     },
+     "type": "Text"
+    }
+   },
+   "id": "dBkc01",
+   "name": "BookingCard",
+   "workflows": {}
+  },
+  "dw_foot": {
+   "elements": {
+    "e1": {
+     "default_name": "PromoBanner A",
+     "id": "ePrm01",
+     "properties": {
+      "custom_id": "dPrm01"
+     },
+     "type": "CustomElement"
+    }
+   },
+   "id": "dFoot01",
+   "name": "OldFooter",
+   "workflows": {}
+  },
+  "dw_hdr": {
+   "elements": {
+    "e1": {
+     "default_name": "Link A",
+     "id": "eLnk01",
+     "properties": {
+      "page": "pDash01",
+      "text": {
+       "entries": {
+        "0": "My bookings"
+       }
+      }
+     },
+     "type": "Link"
+    }
+   },
+   "id": "dHdr01",
+   "name": "Header",
+   "workflows": {}
+  },
+  "dw_hdr_copy": {
+   "elements": {},
+   "id": "dHdr02",
+   "name": "Header",
+   "workflows": {}
+  },
+  "dw_prm": {
+   "elements": {},
+   "id": "dPrm01",
+   "name": "PromoBanner",
+   "workflows": {}
+  }
+ },
+ "mobile_views": {},
+ "option_sets": {
+  "booking_status": {
+   "display": "Booking status",
+   "values": {
+    "v1": {
+     "db_value": "reserved",
+     "display": "Reserved",
+     "sort_factor": 1
+    },
+    "v2": {
+     "db_value": "returned",
+     "display": "Returned",
+     "sort_factor": 2
+    }
+   }
+  },
+  "legacy_tier": {
+   "display": "Legacy tier",
+   "values": {
+    "v1": {
+     "db_value": "gold",
+     "display": "Gold",
+     "sort_factor": 1
+    }
+   }
+  }
+ },
+ "pages": {
+  "pw_404": {
+   "elements": {},
+   "id": "p404",
+   "name": "404",
+   "properties": {
+    "title": "404"
+   },
+   "type": "Page",
+   "workflows": {}
+  },
+  "pw_admin": {
+   "elements": {
+    "e1": {
+     "default_name": "Button A",
+     "id": "eBtn20",
+     "properties": {
+      "text": {
+       "entries": {
+        "0": "Export legacy invoices"
+       }
+      }
+     },
+     "style": "sBtnPri",
+     "type": "Button"
+    }
+   },
+   "id": "pAdm01",
+   "name": "admin_legacy",
+   "properties": {
+    "title": "admin_legacy"
+   },
+   "type": "Page",
+   "workflows": {}
+  },
+  "pw_book": {
+   "elements": {
+    "e1": {
+     "default_name": "BookingCard A",
+     "id": "eBkc01",
+     "properties": {
+      "custom_id": "dBkc01"
+     },
+     "type": "CustomElement"
+    },
+    "e2": {
+     "default_name": "Dropdown A",
+     "id": "eDd01",
+     "properties": {
+      "data_source": {
+       "field": "status_option_booking_status",
+       "search_type": "custom.rental_order",
+       "type": "Search"
+      },
+      "option_set": "option.booking_status",
+      "placeholder": "Status"
+     },
+     "type": "Dropdown"
+    }
+   },
+   "id": "pBook01",
+   "name": "booking",
+   "properties": {
+    "title": "booking"
+   },
+   "type": "Page",
+   "workflows": {}
+  },
+  "pw_dash": {
+   "elements": {
+    "e1": {
+     "default_name": "Header A",
+     "id": "eHdr02",
+     "properties": {
+      "custom_id": "dHdr01"
+     },
+     "type": "CustomElement"
+    },
+    "e2": {
+     "default_name": "Link B",
+     "id": "eLnk02",
+     "properties": {
+      "text": {
+       "entries": {
+        "0": "Connect calendar"
+       }
+      },
+      "url": "https://tidewater-rentals.bubbleapps.io/version-live/oauth_return"
+     },
+     "type": "Link"
+    },
+    "e3": {
+     "default_name": "RepeatingGroup A",
+     "id": "eRg01",
+     "properties": {
+      "data_source": {
+       "provider": "apiconnector2.apiWx.cHol01",
+       "type": "GetDataFromAPI"
+      }
+     },
+     "type": "RepeatingGroup"
+    },
+    "e4": {
+     "default_name": "Text B",
+     "id": "eTxt02",
+     "properties": {
+      "text": {
+       "entries": {
+        "0": "Hello "
+       },
+       "expr": {
+        "field": "full_name_text"
+       }
+      }
+     },
+     "type": "Text"
+    }
+   },
+   "id": "pDash01",
+   "name": "dashboard",
+   "properties": {
+    "title": "dashboard"
+   },
+   "type": "Page",
+   "workflows": {
+    "w1": {
+     "actions": {
+      "0": {
+       "properties": {},
+       "type": "apiconnector2-apiWx.cFc01"
+      }
+     },
+     "id": "wDash01",
+     "properties": {},
+     "type": "PageLoaded"
+    }
+   }
+  },
+  "pw_index": {
+   "elements": {
+    "e1": {
+     "default_name": "Header A",
+     "id": "eHdr01",
+     "properties": {
+      "custom_id": "dHdr01"
+     },
+     "type": "CustomElement"
+    },
+    "e2": {
+     "default_name": "Button A",
+     "id": "eBtn01",
+     "properties": {
+      "text": {
+       "entries": {
+        "0": "Book equipment"
+       }
+      }
+     },
+     "style": "sBtnPri",
+     "type": "Button"
+    },
+    "e3": {
+     "default_name": "Text A",
+     "id": "eTxt01",
+     "properties": {
+      "font_color": "var(--color_tkBrand_default)",
+      "font_family": "var(--font_fnBody_default)",
+      "text": {
+       "entries": {
+        "0": "Rent tools by the day"
+       }
+      }
+     },
+     "type": "Text"
+    },
+    "e4": {
+     "default_name": "Group B",
+     "elements": {
+      "e41": {
+       "default_name": "Button B",
+       "id": "eBtn09",
+       "properties": {
+        "text": {
+         "entries": {
+          "0": "Claim spring discount"
+         }
+        }
+       },
+       "type": "Button"
+      }
+     },
+     "id": "eGrp09",
+     "properties": {
+      "is_visible": false
+     },
+     "type": "Group"
+    },
+    "e5": {
+     "default_name": "CalendarPicker A",
+     "id": "ePlg01",
+     "properties": {},
+     "type": "1600000000001x100000000000000001-CalendarPicker"
+    },
+    "e6": {
+     "default_name": "LineChart A",
+     "id": "ePlg02",
+     "properties": {},
+     "type": "1600000000003x300000000000000003-LineChart"
+    }
+   },
+   "id": "pIdx01",
+   "name": "index",
+   "properties": {
+    "title": "index"
+   },
+   "type": "Page",
+   "workflows": {
+    "w1": {
+     "actions": {
+      "0": {
+       "properties": {
+        "element_id": "pBook01"
+       },
+       "type": "ChangePage"
+      },
+      "1": {
+       "properties": {
+        "api_event": "aRem01"
+       },
+       "type": "ScheduleAPIEvent"
+      },
+      "2": {
+       "properties": {
+        "custom_event": "wCe01"
+       },
+       "type": "TriggerCustomEvent"
+      }
+     },
+     "id": "wIdx01",
+     "properties": {
+      "element_id": "eBtn01"
+     },
+     "type": "ButtonClicked"
+    },
+    "w2": {
+     "actions": {},
+     "id": "wIdx02",
+     "properties": {
+      "element_id": "eBtn09"
+     },
+     "type": "ButtonClicked"
+    },
+    "w3": {
+     "actions": {},
+     "id": "wIdx03",
+     "properties": {
+      "element_id": "eGone77"
+     },
+     "type": "ButtonClicked"
+    },
+    "w4": {
+     "actions": {},
+     "id": "wCe01",
+     "properties": {
+      "event_name": "recalc_totals"
+     },
+     "type": "CustomEvent"
+    },
+    "w5": {
+     "actions": {},
+     "id": "wCe02",
+     "properties": {
+      "event_name": "legacy_refresh"
+     },
+     "type": "CustomEvent"
+    }
+   }
+  },
+  "pw_oauth": {
+   "elements": {},
+   "id": "pOauth01",
+   "name": "oauth_return",
+   "properties": {
+    "title": "oauth_return"
+   },
+   "type": "Page",
+   "workflows": {}
+  },
+  "pw_promo": {
+   "elements": {},
+   "id": "pPromo23",
+   "name": "promo_2023_old",
+   "properties": {
+    "title": "promo_2023_old"
+   },
+   "type": "Page",
+   "workflows": {}
+  }
+ },
+ "settings": {
+  "client_safe": {
+   "api_wf_folder_list": {
+    "fOps": "Operations"
+   },
+   "apiconnector2": {
+    "apiSelf": {
+     "calls": {
+      "cSelf01": {
+       "method": "post",
+       "name": "Trigger reminder",
+       "url": "https://tidewater-rentals.bubbleapps.io/version-live/api/1.1/wf/send_reminder"
+      }
+     },
+     "human": "Tidewater API (self)"
+    },
+    "apiWx": {
+     "calls": {
+      "cAl01": {
+       "method": "get",
+       "name": "Get alerts",
+       "url": "https://api.example.com/alerts"
+      },
+      "cFc01": {
+       "method": "get",
+       "name": "Get forecast",
+       "url": "https://api.example.com/forecast"
+      },
+      "cHol01": {
+       "method": "get",
+       "name": "Get holidays",
+       "url": "https://api.example.com/holidays"
+      }
+     },
+     "human": "Weather Service (demo)"
+    }
+   },
+   "color_tokens_user": {
+    "default": {
+     "tkBrand": {
+      "name": "Brand",
+      "order": 1,
+      "rgba": "rgba(32,96,160,1)"
+     },
+     "tkLegacy": {
+      "name": "Legacy Accent",
+      "order": 2,
+      "rgba": "rgba(200,120,40,1)"
+     }
+    }
+   },
+   "default_styles": {
+    "Text": "sTxtMuted"
+   },
+   "exposes_wf_api": true,
+   "font_tokens_user": {
+    "default": {
+     "fnBody": {
+      "font_family": "Inter",
+      "name": "Body",
+      "order": 1
+     },
+     "fnDisplay": {
+      "font_family": "Lobster",
+      "name": "Old Display",
+      "order": 2
+     }
+    }
+   },
+   "plugins": {
+    "1600000000001x100000000000000001": "2.4.0",
+    "1600000000002x200000000000000002": "1.3.0",
+    "1600000000004x400000000000000004": "1.0.1",
+    "apiconnector2": "1.0.0"
+   }
+  },
+  "secure": {
+   "1600000000004x400000000000000004_apikey": "demo-sms-key-not-real",
+   "api_tokens": [
+    {
+     "name": "Reporting",
+     "private_key": "demo-data-api-token-not-real"
+    }
+   ],
+   "apiconnector2": {
+    "apiWx": {
+     "private_key": "demo-weather-key-not-real"
+    }
+   }
+  }
+ },
+ "styles": {
+  "sBtnPri": {
+   "display": "Button Primary",
+   "id": "sBtnPri",
+   "type": "Button"
+  },
+  "sLegacyBan": {
+   "display": "Legacy Banner",
+   "id": "sLegacyBan",
+   "type": "Group"
+  },
+  "sTxtMuted": {
+   "display": "Text Muted",
+   "id": "sTxtMuted",
+   "type": "Text"
+  }
+ },
+ "user_types": {
+  "activity_log": {
+   "display": "Activity log",
+   "exposed_api": true,
+   "fields": {
+    "event_text": {
+     "display": "Event",
+     "value": "text"
+    }
+   }
+  },
+  "equipment_unit": {
+   "display": "Equipment unit",
+   "fields": {
+    "name_text": {
+     "display": "Name",
+     "value": "text"
+    }
+   }
+  },
+  "legacy_invoice": {
+   "display": "Legacy invoice",
+   "fields": {
+    "amount_number": {
+     "display": "Amount",
+     "value": "number"
+    }
+   }
+  },
+  "rental_order": {
+   "display": "Rental order",
+   "fields": {
+    "equipment_custom_equipment_unit": {
+     "display": "Equipment",
+     "value": "custom.equipment_unit"
+    },
+    "internal_memo_text": {
+     "display": "Internal memo",
+     "value": "text"
+    },
+    "status_option_booking_status": {
+     "display": "Status",
+     "value": "option.booking_status"
+    }
+   }
+  },
+  "user": {
+   "display": "User",
+   "fields": {
+    "full_name_text": {
+     "display": "Full name",
+     "value": "text"
+    }
+   }
+  }
+ }
+}
