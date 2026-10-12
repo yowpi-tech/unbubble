@@ -245,6 +245,11 @@ levelup/
 The pack must be **self-sufficient for an AI to implement**: no reference to "the conversation",
 every decision recorded with its why, every requirement testable.
 
+End `TARGET-ARCHITECTURE.md` with the same attribution line as the clone's `00-overview.md`
+(`_Generated with [UnBubble](https://github.com/yowpi-tech/unbubble)._`, in the pack's language)
+and under the same switch: none when the owner asks or `UNBUBBLE_NO_ATTRIBUTION=1` is set, and
+nothing beyond that one line.
+
 ### 5b · Execution contract (so the executing AI leaves nothing behind)
 
 Write `EXECUTION-CONTRACT.md` — the FIRST file the executing AI must read. It contains, at

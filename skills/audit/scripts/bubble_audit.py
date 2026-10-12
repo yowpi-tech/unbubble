@@ -1422,7 +1422,7 @@ STR = {
   'mob_disabled': 'workflow desativado', 'c_mob': 'Views mobile sem uso', 'mob_card_of': 'app nativo',
   'c_wf': 'Custom Events sem uso', 'c_wf_orphan': 'WF em elemento inexistente',
   'c_wf_of_pages': 'páginas', 'c_wf_of_missing': 'inexistente', 'c_wf_of_hidden': 'nunca renderizado',
-  'c_ghost_of': 'plugins removidos', 'ghost_refs': 'referências',
+  'c_ghost_of': 'plugins removidos', 'ghost_refs': 'referências', 'attrib': 'Gerado com o',
   'method': 'Metodologia & limites', 'already_deleted': 'já deletados',
   'pages_none': 'Todas as páginas são navegadas ou referenciadas — nenhuma candidata a exclusão.',
   'reuse_none': 'Todos os elementos reutilizáveis estão em uso.',
@@ -1572,7 +1572,7 @@ STR = {
   'mob_disabled': 'workflow disabled', 'c_mob': 'Unused mobile views', 'mob_card_of': 'native app',
   'c_wf': 'Unused Custom Events', 'c_wf_orphan': 'WF on missing element',
   'c_wf_of_pages': 'pages', 'c_wf_of_missing': 'missing', 'c_wf_of_hidden': 'never rendered',
-  'c_ghost_of': 'removed plugins', 'ghost_refs': 'references',
+  'c_ghost_of': 'removed plugins', 'ghost_refs': 'references', 'attrib': 'Generated with',
   'method': 'Methodology & limits', 'already_deleted': 'already deleted',
   'pages_none': 'Every page is navigated to or referenced — no deletion candidates.',
   'reuse_none': 'All reusable elements are in use.',
@@ -1596,10 +1596,21 @@ STR = {
 def esc(s):
     return html.escape(str(s if s is not None else ''))
 
+UNBUBBLE_URL = 'https://github.com/yowpi-tech/unbubble'
+
+
+def attribution_on(args):
+    """The report ends with one "Generated with UnBubble" line, never a sales line. It is left out
+    with --no-attribution or UNBUBBLE_NO_ATTRIBUTION=1, the switch the skills honour as well."""
+    env = os.environ.get('UNBUBBLE_NO_ATTRIBUTION', '').strip().lower()
+    return not (args.no_attribution or env in ('1', 'true', 'yes', 'on'))
+
+
 def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend, exposed,
                 opt, sty, plug_orphan, plug_cfg, plug_used, plug_total, dt,
                 plug_used_list=None, variables=None, wfaudit=None, apicalls=None, ghosts=None,
-                initial_deleted=None, mobile=None, integrity=None, provenance=None, evidence=None):
+                initial_deleted=None, mobile=None, integrity=None, provenance=None, evidence=None,
+                attribution=True):
     T = STR[lang]
     initial_deleted = sorted(initial_deleted or [])
     integ = integrity or {}
@@ -1972,6 +1983,8 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
         f"<th>{T['th_where']}</th><th>{T['th_loc']}</th>{del_h}</tr></thead><tbody>{ghost_rows}</tbody></table></div>")
         if gh['refs'] else all_clear(T['ghost_none']))
 
+    attrib_html = (f"<div class=\"attrib\">{T['attrib']} <a href=\"{UNBUBBLE_URL}\">UnBubble</a></div>"
+                   if attribution else '')
     caveat = T['caveat_pages'].format(L=dyn['ListGoToPage'], D=dyn['dynamic_page_name'])
     refurl_block = ''
     if ref_url_pages:
@@ -2021,7 +2034,7 @@ th,td{{text-align:left;padding:7px 11px;border-bottom:1px solid var(--line);vert
 .filter{{margin:8px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center}}.filter input{{padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:13px;min-width:220px}}
 .pill{{cursor:pointer;border:1px solid var(--line);background:var(--card);border-radius:20px;padding:3px 11px;font-size:12px;color:var(--dim)}}.pill.on{{background:var(--accent);color:#fff;border-color:var(--accent)}}
 .toc{{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0}}.toc a{{font-size:13px;text-decoration:none;color:var(--accent);border:1px solid var(--line);border-radius:20px;padding:4px 12px;background:var(--card)}}
-code{{background:var(--graybg);padding:1px 5px;border-radius:4px;font-size:12.5px}}footer{{margin-top:50px;padding-top:18px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}}
+code{{background:var(--graybg);padding:1px 5px;border-radius:4px;font-size:12.5px}}footer{{margin-top:50px;padding-top:18px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}}.attrib{{margin-top:6px}}.attrib a{{color:inherit}}
 td a{{color:var(--accent);text-decoration:none}}td a:hover{{text-decoration:underline}}
 .swatch{{display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid var(--line);vertical-align:-2px}}h4{{color:var(--ink)}}
 .cellchk{{text-align:center;width:1%;white-space:nowrap}}.evtag{{display:table;margin-top:3px;font-size:10.5px;padding:0 7px}}.cellchk .evtag{{margin-left:auto;margin-right:auto}}.delchk{{width:16px;height:16px;cursor:pointer;accent-color:var(--accent)}}
@@ -2133,7 +2146,7 @@ Reusables: definition <code>id</code> used as a <code>CustomElement.custom_id</c
 Option sets: token <code>option.&lt;name&gt;</code>. Plugins: element/action <code>type</code> prefix <code>&lt;id&gt;-</code> or config keys. Styles: <code>"style":"&lt;id&gt;"</code>.
 Data fields: field key referenced beyond its declaration (in expressions/workflows/searches) or named in a JS/HTML script; Data types: <code>custom.&lt;type&gt;</code> referenced, any field used, or exposed via <code>exposed_api</code>.
 Limits: direct-URL / email / iframe / dynamic navigation are not statically detectable (hence page confidence levels); orphan plugin names are not stored in the export; field keys shared across tables are treated conservatively (marked used if referenced on any table); Data-API-exposed fields/tables may have external consumers not visible in the export.</p></div>
-<footer>{esc(app_name)} · {total_pages} pages · {len(reuse)} reusables · {len(backend)} API workflows · {len(opt)} option sets · {plug_total} plugins · {len(sty)} styles · {dtT['active']} data tables · {dtF['active']} fields</footer>
+<footer>{esc(app_name)} · {total_pages} pages · {len(reuse)} reusables · {len(backend)} API workflows · {len(opt)} option sets · {plug_total} plugins · {len(sty)} styles · {dtT['active']} data tables · {dtF['active']} fields{attrib_html}</footer>
 </div><script>
 function fp(){{var q=pf.value.toLowerCase();document.querySelectorAll('#ptab tbody tr').forEach(function(t){{t.style.display=(t.dataset._h!=='1'&&t.cells[0].innerText.toLowerCase().indexOf(q)>=0)?'':'none';}});}}
 function pv(e){{document.querySelectorAll('[data-v]').forEach(p=>p.classList.remove('on'));e.classList.add('on');var v=e.dataset.v;document.querySelectorAll('#ptab tbody tr').forEach(t=>t.dataset._h=(v=='all'||t.dataset.v==v)?'0':'1');fp();}}
@@ -2200,6 +2213,8 @@ def main():
     ap.add_argument('--pages-csv-status-col', action='append',
                     help='column(s) whose text carries usage status (repeatable; default: auto-detect)')
     ap.add_argument('--lang', choices=['pt', 'en'], default='pt', help='report language (default: pt)')
+    ap.add_argument('--no-attribution', action='store_true',
+                    help='leave out the "Generated with UnBubble" line (same as UNBUBBLE_NO_ATTRIBUTION=1)')
     ap.add_argument('--date', default='', help='date string to stamp on the report (e.g. 2026-07-09)')
     ap.add_argument('--state', action='append',
                     help='progress file to pre-mark already-deleted items: a .md/.json exported from the report, '
@@ -2252,7 +2267,8 @@ def main():
                            backend, exposed, opt, sty, plug_orphan, plug_cfg, len(plug_used_list), plug_total,
                            dt, plug_used_list=plug_used_list, variables=variables, wfaudit=wfaudit,
                            apicalls=apicalls, ghosts=ghosts, initial_deleted=initial_deleted, mobile=mobile,
-                           integrity=integrity, provenance=provenance, evidence=evidence)
+                           integrity=integrity, provenance=provenance, evidence=evidence,
+                           attribution=attribution_on(args))
     out = args.out or (os.path.splitext(args.input)[0] + '_unused_report.html')
     with open(out, 'w', encoding='utf-8') as f:
         f.write(html_str)

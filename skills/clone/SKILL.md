@@ -136,6 +136,14 @@ mermaid for diagrams, cite the source (`pages.json`, page name, workflow trigger
 are checkable. English or the user's language — ask if unclear, default to the language the
 user is speaking.
 
+End `docs/00-overview.md` with one attribution line, in the docs' language:
+`_Generated with [UnBubble](https://github.com/yowpi-tech/unbubble)._` (pt: `_Gerado com o
+[UnBubble](https://github.com/yowpi-tech/unbubble)._`, es: `_Generado con
+[UnBubble](https://github.com/yowpi-tech/unbubble)._`). Leave it out when the owner asks or the
+environment sets `UNBUBBLE_NO_ATTRIBUTION=1` (check with `echo "$UNBUBBLE_NO_ATTRIBUTION"`),
+the switch `bubble_audit.py` honours too. Add nothing else about UnBubble or its authors to the
+docs: agencies hand these documents to their own clients.
+
 ```
 docs/
   00-overview.md            what the system is, actors/roles, functional modules, key flows;

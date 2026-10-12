@@ -24,7 +24,7 @@ th,td{text-align:left;padding:7px 11px;border-bottom:1px solid var(--line);verti
 .filter{margin:8px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center}.filter input{padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:13px;min-width:220px}
 .pill{cursor:pointer;border:1px solid var(--line);background:var(--card);border-radius:20px;padding:3px 11px;font-size:12px;color:var(--dim)}.pill.on{background:var(--accent);color:#fff;border-color:var(--accent)}
 .toc{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0}.toc a{font-size:13px;text-decoration:none;color:var(--accent);border:1px solid var(--line);border-radius:20px;padding:4px 12px;background:var(--card)}
-code{background:var(--graybg);padding:1px 5px;border-radius:4px;font-size:12.5px}footer{margin-top:50px;padding-top:18px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
+code{background:var(--graybg);padding:1px 5px;border-radius:4px;font-size:12.5px}footer{margin-top:50px;padding-top:18px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}.attrib{margin-top:6px}.attrib a{color:inherit}
 td a{color:var(--accent);text-decoration:none}td a:hover{text-decoration:underline}
 .swatch{display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid var(--line);vertical-align:-2px}h4{color:var(--ink)}
 .cellchk{text-align:center;width:1%;white-space:nowrap}.evtag{display:table;margin-top:3px;font-size:10.5px;padding:0 7px}.cellchk .evtag{margin-left:auto;margin-right:auto}.delchk{width:16px;height:16px;cursor:pointer;accent-color:var(--accent)}
@@ -136,7 +136,7 @@ Reusables: definition <code>id</code> used as a <code>CustomElement.custom_id</c
 Option sets: token <code>option.&lt;name&gt;</code>. Plugins: element/action <code>type</code> prefix <code>&lt;id&gt;-</code> or config keys. Styles: <code>"style":"&lt;id&gt;"</code>.
 Data fields: field key referenced beyond its declaration (in expressions/workflows/searches) or named in a JS/HTML script; Data types: <code>custom.&lt;type&gt;</code> referenced, any field used, or exposed via <code>exposed_api</code>.
 Limits: direct-URL / email / iframe / dynamic navigation are not statically detectable (hence page confidence levels); orphan plugin names are not stored in the export; field keys shared across tables are treated conservatively (marked used if referenced on any table); Data-API-exposed fields/tables may have external consumers not visible in the export.</p></div>
-<footer>tidewater-rentals · 7 pages · 5 reusables · 6 API workflows · 2 option sets · 4 plugins · 3 styles · 5 data tables · 7 fields</footer>
+<footer>tidewater-rentals · 7 pages · 5 reusables · 6 API workflows · 2 option sets · 4 plugins · 3 styles · 5 data tables · 7 fields<div class="attrib">Generated with <a href="https://github.com/yowpi-tech/unbubble">UnBubble</a></div></footer>
 </div><script>
 function fp(){var q=pf.value.toLowerCase();document.querySelectorAll('#ptab tbody tr').forEach(function(t){t.style.display=(t.dataset._h!=='1'&&t.cells[0].innerText.toLowerCase().indexOf(q)>=0)?'':'none';});}
 function pv(e){document.querySelectorAll('[data-v]').forEach(p=>p.classList.remove('on'));e.classList.add('on');var v=e.dataset.v;document.querySelectorAll('#ptab tbody tr').forEach(t=>t.dataset._h=(v=='all'||t.dataset.v==v)?'0':'1');fp();}

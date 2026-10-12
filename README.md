@@ -5,7 +5,8 @@
 <h1 align="center">UnBubble</h1>
 
 <p align="center">
-  <strong>Take an app off Bubble.io — audited, documented and re-architected — with the coding agent you already use.</strong>
+  <strong>Leaving Bubble.io starts with knowing what your app really does.</strong><br>
+  The method we use on our own migrations, published.
 </p>
 
 <p align="center">
@@ -386,6 +387,21 @@ export stores and references entities — the knowledge the scripts encode.
   and render endpoints are off. Its sessions live in `~/.unbubble/mcp/config` (owner-only) — the
   console checks only whether a session exists and when it was saved — and logs are reported as
   counts, never rows.
+
+## Working with Yowpi
+
+UnBubble is the method we use on our own migrations at Yowpi, published. When the app runs an
+operation that cannot stop while it moves, we run the migration with your team, starting with the
+Operational Architecture Diagnostic: 30 minutes with Yowpi's founder about what transfers, what gets
+redesigned and where the migration starts. We take on up to 6 projects in parallel and work US East
+hours, with the technical owner in every meeting.
+[Book a diagnostic](https://yowpi.com/en/contact?utm_source=github&utm_medium=readme&utm_campaign=unbubble).
+
+Agencies: when a migration is larger than your bench, talk to us about referrals.
+
+The reports and documents UnBubble generates carry no sales copy, only one line, "Generated with
+UnBubble", linking to this repository. Set `UNBUBBLE_NO_ATTRIBUTION=1`, or pass `--no-attribution`
+to `bubble_audit.py`, to leave it out; the skills honour the same switch in the docs they write.
 
 ## Contributing
 
