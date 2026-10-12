@@ -2,7 +2,7 @@
 
 import { useSyncExternalStore } from 'react';
 import Link from 'next/link';
-import { ArrowRight, CheckCircle2, FolderOpen, Rocket, SearchCheck, Sparkles, Wrench, X } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, CheckCircle2, FolderOpen, Rocket, SearchCheck, Sparkles, Wrench, X } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { ProgressBar, StatusBadge, stageHref } from '@/components/stage-badge';
@@ -11,6 +11,10 @@ import type { HostInstall, ProjectSummary, StageKey } from '@/lib/types';
 
 const STAGES: StageKey[] = ['audit', 'clone', 'levelup_docs', 'levelup_impl'];
 const ONBOARDING_KEY = 'unbubble.onboarding.dismissed';
+const YOWPI_CARD_KEY = 'unbubble.yowpi-card.dismissed';
+// The one place in the console that points to Yowpi: the diagnostic, with the console as the lead's origin.
+const YOWPI_CONTACT: Record<string, string> = { pt: '/contato', es: '/es/contacto' };
+const YOWPI_UTM = 'utm_source=unbubble-console&utm_medium=app&utm_campaign=unbubble';
 const listeners = new Set<() => void>();
 function subscribeDismissed(cb: () => void) {
   listeners.add(cb);
@@ -20,23 +24,27 @@ function subscribeDismissed(cb: () => void) {
     window.removeEventListener('storage', cb);
   };
 }
-function readDismissed(): boolean {
+function readFlag(key: string): boolean {
   try {
-    return localStorage.getItem(ONBOARDING_KEY) === '1';
+    return localStorage.getItem(key) === '1';
   } catch {
     return false;
   }
 }
+const readDismissed = () => readFlag(ONBOARDING_KEY);
+const readYowpiDismissed = () => readFlag(YOWPI_CARD_KEY);
 
 export function DashboardView({ projects, hosts }: { projects: ProjectSummary[]; hosts: HostInstall[] }) {
   const { t, locale } = useLocale();
   // Per-viewer convenience flag; hidden during SSR, resolved from localStorage on the client.
   const dismissed = useSyncExternalStore(subscribeDismissed, readDismissed, () => true);
   const showOnboarding = !dismissed;
+  const yowpiDismissed = useSyncExternalStore(subscribeDismissed, readYowpiDismissed, () => true);
+  const yowpiHref = `https://yowpi.com${YOWPI_CONTACT[locale] ?? '/en/contact'}?${YOWPI_UTM}`;
 
-  function dismiss() {
+  function hide(key: string) {
     try {
-      localStorage.setItem(ONBOARDING_KEY, '1');
+      localStorage.setItem(key, '1');
     } catch {
       /* ignore */
     }
@@ -74,7 +82,7 @@ export function DashboardView({ projects, hosts }: { projects: ProjectSummary[];
                   {t('dash.onboardingCta')}
                   <ArrowRight className="size-3.5" />
                 </Button>
-                <Button size="sm" variant="ghost" onClick={dismiss}>
+                <Button size="sm" variant="ghost" onClick={() => hide(ONBOARDING_KEY)}>
                   <X className="size-3.5" />
                   {t('dash.onboardingDismiss')}
                 </Button>
@@ -185,6 +193,30 @@ export function DashboardView({ projects, hosts }: { projects: ProjectSummary[];
               </div>
             </CardContent>
           </Card>
+
+          {!yowpiDismissed && (
+            <Card className="mt-4">
+              <CardContent className="pt-6">
+                <h2 className="text-sm font-semibold">{t('dash.yowpiTitle')}</h2>
+                <p className="text-sm text-zinc-500 mt-1">{t('dash.yowpiBody')}</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    nativeButton={false}
+                    render={<a href={yowpiHref} target="_blank" rel="noopener noreferrer" />}
+                  >
+                    {t('dash.yowpiCta')}
+                    <ArrowUpRight className="size-3.5" />
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => hide(YOWPI_CARD_KEY)}>
+                    <X className="size-3.5" />
+                    {t('dash.yowpiHide')}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
     </div>

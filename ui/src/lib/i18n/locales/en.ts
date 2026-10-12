@@ -70,6 +70,10 @@ export const en = {
   'dash.onboardingBody': 'Four steps: install the skills in your agent, export the .bubble, run the audit, and follow the pipeline here.',
   'dash.onboardingCta': 'Start onboarding',
   'dash.onboardingDismiss': 'Got it, hide',
+  'dash.yowpiTitle': 'Working with Yowpi',
+  'dash.yowpiBody': "UnBubble is the method we use on our own migrations. When the app runs an operation that cannot stop while it moves, we run the migration with your team, starting with the Operational Architecture Diagnostic: 30 minutes with Yowpi's founder.",
+  'dash.yowpiCta': 'Book a diagnostic',
+  'dash.yowpiHide': 'Hide',
 
   'projects.title': 'Projects',
   'projects.subtitle': 'One folder per app in',

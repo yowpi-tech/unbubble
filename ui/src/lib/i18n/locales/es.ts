@@ -67,6 +67,10 @@ export const es: Dictionary = {
   'dash.onboardingBody': 'Cuatro pasos: instalar las skills en tu agente, exportar el .bubble, ejecutar el audit y seguir el pipeline aquí.',
   'dash.onboardingCta': 'Empezar el onboarding',
   'dash.onboardingDismiss': 'Entendido, ocultar',
+  'dash.yowpiTitle': 'Trabajar con Yowpi',
+  'dash.yowpiBody': 'UnBubble es el método que usamos en nuestras migraciones. Cuando la app sostiene una operación que no puede detenerse mientras cambia, hacemos la migración con tu equipo, empezando por el Diagnóstico de Arquitectura Operacional: 30 minutos con el fundador de Yowpi.',
+  'dash.yowpiCta': 'Agendar diagnóstico',
+  'dash.yowpiHide': 'Ocultar',
 
   'projects.title': 'Proyectos',
   'projects.subtitle': 'Una carpeta por app en',
