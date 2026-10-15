@@ -10,10 +10,10 @@ writes batches of MCP tool calls, in dependency order — page workflows and cus
 option sets, styles, color/font variables, data fields, data types (soft delete) — each item with
 the exact tool arguments (execute=false: the agent previews, the owner approves the batch, only
 then execute=true + confirm=true). Items the owner kept, items already deleted, items already
-applied on this target, and items the audit's runtime evidence saw in the server logs
-(bubble_audit.py --evidence) are left out. What the MCP cannot delete (reusable definitions, backend
-workflows, plugins, API Connector calls, removed-plugin references, mobile views, ambiguous names)
-goes to a `manual` list with where to find it in the editor.
+applied on this target, and items the audit's runtime evidence saw running — in the server logs or
+in the workload metrics (bubble_audit.py --evidence) — are left out. What the MCP cannot delete
+(reusable definitions, backend workflows, plugins, API Connector calls, removed-plugin references,
+mobile views, ambiguous names) goes to a `manual` list with where to find it in the editor.
 
 Defaults are conservative: only high-confidence categories. `--include-review` adds pages and
 workflows on never-rendered elements; `--include-destructive` adds data fields and tables (never
@@ -103,11 +103,11 @@ def build_plan(audit, *, profile, app_version, deleted, kept, applied, include_r
         if key in deleted or key in applied:
             skipped['already deleted or applied'] += 1
             return False
-        hits = (evidence.get(key) or {}).get('hits')
-        if hits:  # the server logs show it running: not a deletion candidate, whatever the export says
-            skipped['seen in the server logs (runtime evidence)'] += 1
-            alive.append({'key': key, 'label': item.get('label') or key, 'hits': hits,
-                          'last_seen': (evidence.get(key) or {}).get('last_seen')})
+        seen = evidence.get(key) or {}
+        if seen.get('hits'):  # it runs (logs or workload): not a deletion candidate, whatever the export says
+            skipped['seen at runtime (runtime evidence)'] += 1
+            alive.append({'key': key, 'label': item.get('label') or key, 'hits': seen['hits'],
+                          'source': seen.get('kind') or 'logs', 'last_seen': seen.get('last_seen')})
             return False
         return True
 
@@ -229,6 +229,12 @@ def build_plan(audit, *, profile, app_version, deleted, kept, applied, include_r
     }
 
 
+def seen_at_runtime(item):
+    if item.get('source') == 'runs':
+        return 'ran %d× (workload metrics)' % item['hits']
+    return '%d× in the server logs (last %s)' % (item['hits'], item.get('last_seen') or '?')
+
+
 def to_markdown(plan):
     lines = ['# Cleanup plan — %s' % plan['app'], '',
              'Target: profile `%s`, version `%s` · created %s'
@@ -245,9 +251,9 @@ def to_markdown(plan):
         lines += ['- `%s` — %s: %s' % (item['key'], item['label'], item['where']) for item in plan['manual']]
         lines.append('')
     if plan.get('seen_at_runtime'):
-        lines += ['## Seen in the server logs — not planned (%d)' % len(plan['seen_at_runtime']), '',
+        lines += ['## Seen at runtime — not planned (%d)' % len(plan['seen_at_runtime']), '',
                   'The export shows no use, but the runtime evidence does: ask the owner who calls these.', '']
-        lines += ['- `%s` — %s: %d× (last %s)' % (item['key'], item['label'], item['hits'], item.get('last_seen') or '?')
+        lines += ['- `%s` — %s: %s' % (item['key'], item['label'], seen_at_runtime(item))
                   for item in plan['seen_at_runtime']]
         lines.append('')
     if plan['skipped']:

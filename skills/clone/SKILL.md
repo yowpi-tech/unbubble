@@ -218,14 +218,16 @@ testing, external consumers not visible in the export (API tokens), and where an
 "encryption"/token logic actually runs.
 
 **Bring evidence to the question when connected mode is available.** Two of these have a runtime
-answer in the server logs of live, before asking: *does this exposed endpoint have external
-consumers?* (runs of the backend workflow behind it) and *is the integration behind this flag
-alive?* (runs of the workflow or the API Connector call on that path). Use
-`<connect>/scripts/runtime_evidence.py` for many candidates or `bubble_logs_fetch` with `contains:
-"<workflow or call name>"` for one, over 14–30 days, and put the counts and the last-seen date in
-the question ("the endpoint ran 1,284 times in 14 days, last today — keep it in the parity
-contract?"). Counts only, never log rows. Logs answer "it runs"; silence only covers the window
-and the plan's retention, so the owner still decides — record the evidence next to the decision.
+answer in the live app, before asking: *does this exposed endpoint have external consumers?* (runs
+of the backend workflow behind it) and *is the integration behind this flag alive?* (runs of the
+workflow or the API Connector call on that path). Use `<connect>/scripts/runtime_evidence.py` —
+`--source workload` counts workflow runs (Workflow API calls by endpoint name), the default reads
+the server logs — for many candidates, or for one `bubble_workload_usage_breakdown` or
+`bubble_logs_fetch` with `contains: "<workflow or call name>"` over 14–30 days, and put the counts
+in the question ("the endpoint ran 1,284 times in 30 days — keep it in the parity contract?").
+Counts only, never log rows. Runs and log rows answer "it runs"; silence only covers the window
+(and, for logs, only after a workflow known to run came back: some apps answer every logs query
+with zero rows), so the owner still decides — record the evidence next to the decision.
 
 ### Plugin policy (encode it in 03-plugins.md)
 

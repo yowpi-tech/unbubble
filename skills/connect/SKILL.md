@@ -7,17 +7,17 @@ description: >
   counts, plan usage, file storage, the editor changelog ("who changed what, when"), branches and
   contributors; download a fresh .bubble export of version-test or a branch with provenance;
   capture what every screen shows per user role (public and logged-in pages, test users only) and
-  check the rebuilt app for minimum content parity; runtime evidence from logs for audit
-  candidates (is this backend workflow / webhook / page / API call still used?); APPLY the audit
-  cleanup on a dedicated branch with owner approval per batch; and the Bubble side of the cutover
-  (Data API exposure, 301 redirects, drain checks). Use when the user asks things like "look at
-  my Bubble app", "check the logs", "why is my WU so high", "what is spending workload", "who
-  changed this page", "what changed since the export", "download the export", "baixar o export",
-  "ver os logs do Bubble", "consumo de WU", "quem alterou", "capturar as telas", "telas logadas",
-  "apply the cleanup", "aplicar a limpeza no Bubble", "apagar no editor pelo MCP", "is this
-  webhook still called", "prepare the Data API for the migration", or when another UnBubble step
-  (audit, clone, level-up) needs live data. Requires the one-time install in mcp/; without it the
-  core pipeline keeps working offline on .bubble files.
+  check the rebuilt app for minimum content parity; runtime evidence from workflow run counts and
+  logs for audit candidates (is this backend workflow / webhook / page / API call still used?);
+  APPLY the audit cleanup on a dedicated branch with owner approval per batch; and the Bubble side
+  of the cutover (Data API exposure, 301 redirects, drain checks). Use when the user asks things
+  like "look at my Bubble app", "check the logs", "why is my WU so high", "what is spending
+  workload", "who changed this page", "what changed since the export", "download the export",
+  "baixar o export", "ver os logs do Bubble", "consumo de WU", "quem alterou", "capturar as telas",
+  "telas logadas", "apply the cleanup", "aplicar a limpeza no Bubble", "apagar no editor pelo MCP",
+  "is this webhook still called", "prepare the Data API for the migration", or when another
+  UnBubble step (audit, clone, level-up) needs live data. Requires the one-time install in mcp/;
+  without it the core pipeline keeps working offline on .bubble files.
 ---
 
 # Connected mode (optional)
@@ -95,7 +95,7 @@ data-type deletion.
 
 | The user wants | Use | Read |
 |---|---|---|
-| Logs of a workflow, errors, "is X still running" | `bubble_logs_fetch` (short windows) or `scripts/runtime_evidence.py` (counts for many candidates) | `references/diagnostics.md` |
+| Logs of a workflow, errors, "is X still running" | `bubble_logs_fetch` (short windows; an empty answer proves nothing until a workflow known to run comes back) or `scripts/runtime_evidence.py` (counts for many candidates; `--source workload` for run counts) | `references/diagnostics.md` |
 | WU spend, what consumes it, plan usage, storage, run counts | `bubble_workload_usage_breakdown`, `bubble_workload_usage_by_date`, `bubble_plan_usage_get`, `bubble_storage_usage_get`, `bubble_workflow_runs_get`, `bubble_performance_audit` | `references/diagnostics.md` |
 | Who changed what / what changed since the export | `bubble_changelog_fetch`, `bubble_branch_contributors`, `bubble_branch_list` | `references/diagnostics.md` |
 | Inspect the app structure live (pages, workflows, types, styles) | `bubble_context_summary`, `inspect_context`, `list_*` read tools — or, better for anything broad, a fresh export + the offline skills | `references/diagnostics.md` |
@@ -110,9 +110,9 @@ data-type deletion.
 | Step | Connected mode adds |
 |---|---|
 | `unbubble:audit` 1 | a fresh export of `test` with provenance (`fetch_export.py`) |
-| `unbubble:audit` 3b | runtime evidence → `bubble_audit.py --evidence` puts a **logs: N×** badge on each candidate it checked |
+| `unbubble:audit` 3b | runtime evidence → `bubble_audit.py --evidence` puts a **runs: N×** (workload) or **logs: N×** badge on each candidate it checked |
 | `unbubble:audit` 6 | the cleanup applied on a branch, batch by batch (`references/cleanup.md`), then round N+1 |
-| `unbubble:clone` 1 · 3b · 06 | the lean export after the merge; log evidence for "external consumers?" / "is the flagged integration live?"; what each role sees per page |
+| `unbubble:clone` 1 · 3b · 06 | the lean export after the merge; runtime evidence (run counts, logs) for "external consumers?" / "is the flagged integration live?"; what each role sees per page |
 | `unbubble:level-up` 2b · 4 · 6b | content inventory per screen and role; sizing (storage, WU, plan) and the Bubble side of the cutover; the minimum screen-parity gate |
 
 **Long operations go through the scripts, not MCP tool calls.** Export downloads and paginated log
@@ -146,7 +146,7 @@ real path, write owner-only files (0600/0700) and never print raw CLI output.
 | Script | Does |
 |---|---|
 | `scripts/fetch_export.py` | export download with provenance (above) |
-| `scripts/runtime_evidence.py` | one paginated log pull for a window, matched locally against audit candidates; counts and first/last seen only; a failed or partial pull yields "unknown", never "not seen" |
+| `scripts/runtime_evidence.py` | audit candidates against the live app, counts only: `--source workload` joins run counts per workflow (workload metrics) to the export; `--source logs` matches a log pull locally, behind a positive control (a workflow known to run must come back, else every zero is unknown and it exits 3); a failed or partial query yields "unknown", never "not seen" |
 | `scripts/cleanup_plan.py` | audit JSON (+ progress + journal) → ordered batches of tool calls, each with preview `args` and approved-write `apply_args` (styles by exact `style_id`, variables by token id) + a manual list |
 | `scripts/cleanup_journal.py` | append-only journal of applied deletions: `add`, `merged`, `verify`, `show` |
 | `scripts/capture_screens.py` | DOM snapshot + full-page screenshot per page and role, Bubble or rebuilt app; every run merges into `visual/INDEX-<target>.json` |
@@ -160,6 +160,7 @@ Connected mode adds to `~/UnBubble-Projects/<app>/` (see `unbubble:audit`):
 audit/     cleanup-applied__<app>.json        journal of deletions applied through the MCP
            <app>-vN_cleanup-plan.json|md      cleanup plan of round N
            runtime-evidence__<app>-vN.json    log evidence for round N's candidates
+           runtime-evidence__<app>-vN.workload.json   workflow run counts for the same candidates
 visual/    bubble/<role>/<page>.json|png      Bubble screens per role (INDEX-bubble.md)
            rebuild/<role>/<page>.json|png     rebuilt app screens (INDEX-rebuild.md)
 levelup/   screen-parity.md|json              parity report; screen-parity-verdicts.json (owner)
