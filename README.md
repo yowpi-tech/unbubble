@@ -157,7 +157,7 @@ first:
   audit/       one report per round + bubble_cleanup_progress__<app>.json (deletions,
                section sign-offs, items kept on purpose); with the connected mode also
                cleanup-applied__<app>.json (deletions applied through it) and
-               runtime-evidence__<app>-vN.json (log counts per candidate)
+               runtime-evidence__<app>-vN[.workload].json (log and run counts per candidate)
   inventory/   JSON inventories extracted from the export                 (clone)
   secrets/     .env (live keys, chmod 600, gitignored) · .env.example · ENV-KEYS.md
   docs/        00-overview … 08-open-questions                            (clone)
@@ -211,7 +211,9 @@ the safety model below, the installer and launcher, and the `connect` skill with
 - **Fresh exports** of `version-test` or a branch, each kept as an immutable copy with its
   provenance (version, time, sha256), which the audit report shows in its header.
 - **Runtime evidence** for the audit's candidates — is this endpoint, webhook, page or API call
-  still used? — as `logs: N×` badges in the report (`bubble_audit.py --evidence`).
+  still used? — from workflow run counts (workload metrics) and server logs, as `runs: N×` and
+  `logs: N×` badges in the report (`bubble_audit.py --evidence`). A zero counts only after a
+  positive control: some large apps answer every logs query with zero rows.
 - **The audit cleanup applied for you** on a dedicated branch, batch by batch: every batch is
   previewed and approved by the owner, applied, recorded in a journal and verified with a fresh
   export and a new audit round. The owner merges the branch and deploys, by hand.
@@ -362,6 +364,7 @@ skills/
                 evidence, screens, cutover) · scripts/ (export download, runtime evidence, cleanup
                 plan + journal, screen captures, screen parity)
 examples/       demo-app/ — a fictional export and the outputs the scripts produce from it
+tests/          stdlib unittest on synthetic data (`python3 -m unittest discover -s tests`)
 ui/             the local console (Next.js) — progress per project, embedded reports,
                 docs viewer, backlog tracking, install detection and onboarding
 mcp/            connected mode: befree-bubble-mcp by Befree (MIT), vendored as the hardened

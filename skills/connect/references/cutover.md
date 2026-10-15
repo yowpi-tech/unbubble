@@ -78,8 +78,9 @@ Bubble should go quiet once traffic moves. Daily, until the owner closes the app
 
 - `bubble_workload_usage_by_date` with `granularity: "hour"` — the curve should fall to background
   level (scheduled jobs that still run there are part of the plan or a leftover to switch off);
-- `scripts/runtime_evidence.py` on the round's endpoints and backend workflows, or
-  `bubble_logs_fetch` with `contains` per endpoint — anything still **seen** is a caller to re-point
+- `scripts/runtime_evidence.py --source workload` on the round's endpoints and backend workflows
+  (or the logs, once their positive control passes), or `bubble_logs_fetch` with `contains` per
+  endpoint — anything still **seen** is a caller to re-point
   (payment and messaging webhooks, partner systems, old links, mobile apps in the field);
 - report counts per day per endpoint; never log rows.
 

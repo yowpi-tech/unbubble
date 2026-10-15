@@ -98,7 +98,7 @@ python3 scripts/bubble_audit.py export.bubble \
   --state progress.md \      # optional, repeatable: pre-check items already deleted (report Export
                              #   .md/.json, or the connected-mode cleanup journal — keys are merged)
   --evidence ev.json \        # optional, repeatable: runtime evidence from the connected mode — a
-                             #   "logs: N×" badge on every candidate it checked (step 3b)
+                             #   "runs: N×" or "logs: N×" badge on every candidate it checked (step 3b)
   --plugin-names names.json  # optional: extra {pluginId: name} to extend the bundled registry
 ```
 
@@ -130,20 +130,29 @@ on a 100 MB file. It never modifies the export.
    `--json` carries it as `export_integrity`.
 3b. **Runtime evidence (connected mode, optional).** Static analysis cannot see callers from
    outside the app: an exposed endpoint a partner calls, a webhook, a page opened by direct link, an
-   API call that does run. When connected mode is available, run it on this round's JSON and
-   regenerate the report with the evidence:
+   API call that does run. When connected mode is available, gather evidence for this round's JSON
+   from two sources — workflow runs in the workload metrics (best for workflows) and the server logs
+   (pages and API calls) — and regenerate the report with both:
 
    ```bash
    python3 <connect>/scripts/runtime_evidence.py ~/UnBubble-Projects/<app>/audit/<app>-vN_audit.json \
-       --profile <app-id> --days 14
+       --profile <app-id> --source workload --export <export>
+   python3 <connect>/scripts/runtime_evidence.py ~/UnBubble-Projects/<app>/audit/<app>-vN_audit.json \
+       --profile <app-id> --export <export> --days 14
    python3 scripts/bubble_audit.py <export> --out … --json … --state … \
-       --evidence ~/UnBubble-Projects/<app>/audit/runtime-evidence__<app>-vN.json
+       --evidence ~/UnBubble-Projects/<app>/audit/runtime-evidence__<app>-vN.json \
+       --evidence ~/UnBubble-Projects/<app>/audit/runtime-evidence__<app>-vN.workload.json
    ```
 
-   Every checked candidate gets a badge: **logs: N×** (seen — likely in real use: review before
-   deleting; the connected-mode cleanup plan leaves these out), **logs: 0** (not seen in the window —
-   strengthens "unused", never proves it), **logs: ?** (no evidence). The header states the window
-   and the version read (live by default). Relay counts, never log rows; read
+   Pass only files whose run exited 0. **Exit 3 means the source showed nothing even for a workflow
+   known to run** (on some large apps the logs answer every query with zero rows): its zeros were
+   made unknown — leave that file out and say so. Every checked candidate gets a badge naming its
+   source: **runs: N×** (pt **execuções**) / **logs: N×** (seen — likely in real use: review before
+   deleting; the connected-mode cleanup plan leaves these out), **runs: 0** / **logs: 0** (not seen
+   in the window — strengthens "unused", never proves it), **runs: ?** / **logs: ?** (no evidence:
+   the workload does not meter pages or API Connector calls, or the data was incomplete). The header
+   states each source's window — for the workload, the days Bubble still keeps (about 31) — and, for
+   the logs, the version read (live by default). Relay counts, never log rows; read
    `<connect>/references/evidence.md` before interpreting.
 4. **Verify the report renders** if you have a browser/preview available (serve the folder with
    `python3 -m http.server` — note macOS blocks serving `~/Downloads`, so copy the HTML to a
@@ -155,9 +164,9 @@ on a 100 MB file. It never modifies the export.
    batches previewed and approved by the owner one at a time → journal → fresh export of the branch
    → audit round N+1 with `--state` (progress + journal) → the owner merges the branch, later
    deploys, both by hand. Follow `<connect>/references/cleanup.md` exactly — it never writes to
-   live, never deletes what the owner kept or what the logs show running, and leaves reusable
-   definitions, backend workflows, plugins and API Connector calls to the owner (the MCP cannot
-   delete them).
+   live, never deletes what the owner kept or what the runtime evidence shows running, and leaves
+   reusable definitions, backend workflows, plugins and API Connector calls to the owner (the MCP
+   cannot delete them).
 
 ## Confidence levels — this is the most important part to communicate
 
@@ -205,8 +214,9 @@ report trustworthy.
 
 Always tell the user: **start with the high-confidence deletions; treat the page list as
 candidates to review, not a delete list.** When runtime evidence was attached (step 3b), a
-**logs: N×** badge overrides the static verdict for that item — something the export calls unused
-is running — while **logs: 0** only narrows the review (the window and log retention are finite).
+**runs: N×** or **logs: N×** badge overrides the static verdict for that item — something the export
+calls unused is running — while **runs: 0** / **logs: 0** only narrows the review (the window, the
+workload history and the log retention are finite).
 
 ## Plugin names & marketplace links
 
@@ -320,5 +330,5 @@ plan, the console) never re-derive it. Backend and page custom events share the 
 prefix; their `scope` field (`backend` / `page`) tells them apart. It also carries
 `export_integrity` (see step 3) and `provenance` — version, download time and sha256 when the export
 came through the connected mode with a `<export>.meta.json` sidecar (the report header shows it too),
-and, with `--evidence`, `runtime_evidence` (`by_key`: hits / first and last seen per tracker key,
-plus the window and the version read).
+and, with `--evidence`, `runtime_evidence` (`by_key`: hits / first and last seen per tracker key and
+the `kind` of evidence behind it, `logs` or `runs`; `sources`: each source's window and version read).

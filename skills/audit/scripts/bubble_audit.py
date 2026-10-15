@@ -1218,13 +1218,21 @@ def load_provenance(export_path):
         return None
 
 # ------------------------------------------------------------------ progress state (round-trips with the report's Export)
+def evidence_kind(method):
+    """`runs` for an evidence file from the workload metrics (method "workload"), `logs` for one from
+    the server logs (every other method, and every file written before the workload source)."""
+    return 'runs' if str(method or '').startswith('workload') else 'logs'
+
 def load_evidence(paths, app_name):
-    """Runtime evidence written by the connected mode (unbubble:connect runtime_evidence.py):
-    per tracker key, how often the candidate shows up in the app's server logs in a window.
-    Repeatable; later files win for the same key. A file for another app is ignored."""
+    """Runtime evidence written by the connected mode (unbubble:connect runtime_evidence.py): per
+    tracker key, how often the candidate showed up at runtime in a window — in the server logs
+    (`logs`) or as workflow runs in the workload metrics (`runs`). Repeatable, typically one file per
+    source: for a key, seen beats not seen beats unknown, so a source that cannot measure an item
+    never hides one that did; between equals the later file wins. A file for another app is ignored."""
     if isinstance(paths, str):
         paths = [paths]
-    by_key, meta, used = {}, {}, 0
+    rank = lambda hits: 2 if hits else (1 if hits == 0 else 0)
+    by_key, sources, meta, used = {}, {}, {}, 0
     for path in paths or []:
         try:
             with open(path, encoding='utf-8') as f:
@@ -1239,18 +1247,29 @@ def load_evidence(paths, app_name):
             log('evidence: file is for app %r, not %r - ignored: %s' % (data.get('app'), app_name, path))
             continue
         used += 1
+        kind = evidence_kind(data.get('method'))
         meta = {'window': data.get('window') or {}, 'app_version': data.get('app_version'),
                 'method': data.get('method')}
+        sources[kind] = dict(meta, kind=kind)
         for row in data['candidates']:
             if isinstance(row, dict) and row.get('key'):
-                by_key[row['key']] = {'hits': row.get('hits'), 'first_seen': row.get('first_seen'),
-                                      'last_seen': row.get('last_seen'), 'coverage': row.get('coverage')}
+                new = {'hits': row.get('hits'), 'first_seen': row.get('first_seen'),
+                       'last_seen': row.get('last_seen'), 'coverage': row.get('coverage'),
+                       'kind': kind, 'basis': row.get('basis')}
+                old = by_key.get(row['key'])
+                if old is None or rank(new['hits']) >= rank(old['hits']):
+                    by_key[row['key']] = new
     if not used:
         return None
-    counts = {'seen': sum(1 for v in by_key.values() if v['hits']),
-              'not_seen': sum(1 for v in by_key.values() if v['hits'] == 0),
-              'unknown': sum(1 for v in by_key.values() if v['hits'] is None)}
-    return dict(meta, by_key=by_key, counts=counts, files=used)
+    def count(rows):
+        rows = list(rows)
+        return {'seen': sum(1 for v in rows if v['hits']),
+                'not_seen': sum(1 for v in rows if v['hits'] == 0),
+                'unknown': sum(1 for v in rows if v['hits'] is None)}
+    for kind, src in sources.items():
+        src['counts'] = count(v for v in by_key.values() if v['kind'] == kind)
+    return dict(meta, by_key=by_key, counts=count(by_key.values()), files=used,
+                sources=[sources[kind] for kind in ('logs', 'runs') if kind in sources])
 
 def journal_counts(entry):
     """A cleanup-journal entry counts as deleted in the app when the call succeeded and it was
@@ -1298,11 +1317,17 @@ STR = {
   'integ_b': '{m} de {n} definições de reutilizáveis aparecem no índice do editor sem o conteúdo no export ({h} vazias). Tudo o que existe dentro delas — navegação, option sets, estilos, elementos de plugin, workflows agendados — ficou invisível para esta análise, então achados de qualquer seção podem ser falsos positivos. Reexporte o app ou baixe o export pelo modo conectado (unbubble:connect), que reidrata as definições, e rode o audit de novo.',
   'integ_sample': 'Exemplos',
   'prov_label': 'export baixado pelo modo conectado', 'prov_version': 'versão',
-  'ev_t': 'Evidência de runtime (logs do servidor)',
-  'ev_b': 'logs de <span class="mono">{ver}</span>, {d} dias até {end}: <strong>{seen}</strong> candidato(s) vistos, {none} não vistos, {unk} sem evidência. Cada item avaliado ganha um selo “logs:”. “Não visto” cobre só essa janela e a retenção de logs do plano: reforça o “sem uso”, não prova.',
+  'ev_t': 'Evidência de runtime',
+  'ev_b': 'logs do servidor de <span class="mono">{ver}</span>, {d} dias até {end}: <strong>{seen}</strong> candidato(s) visto(s), {none} não visto(s), {unk} sem evidência. Cada item avaliado ganha um selo “logs:”. “Não visto” cobre só essa janela e a retenção de logs do plano: reforça o “sem uso”, não prova.',
   'ev_seen': 'logs: {n}×', 'ev_seen_t': 'Visto {n}× nos logs de {ver} em {d} dias (última vez {last}): provável uso real — revise antes de apagar.',
   'ev_none': 'logs: 0', 'ev_none_t': 'Não visto nos logs de {ver} em {d} dias (só essa janela e a retenção do plano).',
-  'ev_unk': 'logs: ?', 'ev_unk_t': 'Sem evidência: a consulta falhou, foi parcial ou passou do limite de candidatos.',
+  'ev_unk': 'logs: ?', 'ev_unk_t': 'Sem evidência: a consulta falhou, foi parcial, passou do limite de candidatos, ou os logs não devolveram linhas nem para um workflow sabidamente ativo (controle positivo).',
+  'ev_b_runs': 'execuções de workflows nas métricas de workload do Bubble (todas as versões), {d} dias até {end}{since}: <strong>{seen}</strong> candidato(s) com execuções, {none} sem execuções, {unk} sem evidência. Cada item avaliado ganha um selo “execuções:”. Custom events contam pelas execuções dos workflows que os disparam; páginas e chamadas de API Connector não são medidas aqui. “Não executou” cobre só essa janela (o Bubble guarda cerca de 31 dias de workload): reforça o “sem uso”, não prova.',
+  'ev_since': ' (dados a partir de {day})',
+  'ev_seen_runs': 'execuções: {n}×', 'ev_seen_runs_t': 'Executou {n}× em {d} dias segundo as métricas de workload: provável uso real — revise antes de apagar.',
+  'ev_via_runs_t': 'Os workflows que disparam este custom event executaram {n}× em {d} dias (o workload conta o custom event dentro de quem o dispara, então é um teto): provável uso — revise antes de apagar.',
+  'ev_none_runs': 'execuções: 0', 'ev_none_runs_t': 'Nenhuma execução nas métricas de workload em {d} dias (só essa janela).',
+  'ev_unk_runs': 'execuções: ?', 'ev_unk_runs_t': 'Sem evidência: o workload não mede este item (páginas, chamadas de API Connector, custom events que nada dispara, workflows de página sem ação no servidor) ou os dados dele vieram incompletos.',
   'how_body': 'Cada item tem um grau de confiança. Em Bubble, “não referenciado” nem sempre significa “seguro para excluir”: páginas têm URL pública própria (podem ser abertas por link direto, e-mail ou iframe/embed) e plugins podem rodar no servidor sem elemento visível. Backend workflows, option sets, reutilizáveis e estilos têm sinais determinísticos e alta confiança.',
   'c_pages': 'Páginas sem navegação interna', 'c_reuse': 'Reutilizáveis não usados',
   'c_back': 'Backend workflows inalcançáveis', 'c_opt': 'Option Sets sem uso',
@@ -1448,11 +1473,17 @@ STR = {
   'integ_b': '{m} of {n} reusable definitions appear in the editor index without their content in the export ({h} hollow). Everything inside them — navigation, option sets, styles, plugin elements, scheduled workflows — is invisible to this analysis, so findings in any section may be false positives. Re-export the app or download the export through the connected mode (unbubble:connect), which re-hydrates the definitions, and run the audit again.',
   'integ_sample': 'Examples',
   'prov_label': 'export downloaded through the connected mode', 'prov_version': 'version',
-  'ev_t': 'Runtime evidence (server logs)',
-  'ev_b': 'logs of <span class="mono">{ver}</span>, {d} days up to {end}: <strong>{seen}</strong> candidate(s) seen, {none} not seen, {unk} without evidence. Every evaluated item carries a “logs:” badge. “Not seen” covers only this window and the plan\'s log retention: it strengthens “unused”, it does not prove it.',
+  'ev_t': 'Runtime evidence',
+  'ev_b': 'server logs of <span class="mono">{ver}</span>, {d} days up to {end}: <strong>{seen}</strong> candidate(s) seen, {none} not seen, {unk} without evidence. Every evaluated item carries a “logs:” badge. “Not seen” covers only this window and the plan\'s log retention: it strengthens “unused”, it does not prove it.',
   'ev_seen': 'logs: {n}×', 'ev_seen_t': 'Seen {n}× in the {ver} logs over {d} days (last {last}): likely in real use — review before deleting.',
   'ev_none': 'logs: 0', 'ev_none_t': 'Not seen in the {ver} logs over {d} days (this window and the plan\'s retention only).',
-  'ev_unk': 'logs: ?', 'ev_unk_t': 'No evidence: the query failed, was partial or went over the candidate cap.',
+  'ev_unk': 'logs: ?', 'ev_unk_t': 'No evidence: the query failed, was partial, went over the candidate cap, or the logs returned no rows even for a workflow known to run (positive control).',
+  'ev_b_runs': 'workflow runs in Bubble\'s workload metrics (all versions), {d} days up to {end}{since}: <strong>{seen}</strong> candidate(s) ran, {none} did not run, {unk} without evidence. Every evaluated item carries a “runs:” badge. Custom events count through the workflows that trigger them; pages and API Connector calls are not metered here. “Did not run” covers only this window (Bubble keeps about 31 days of workload): it strengthens “unused”, it does not prove it.',
+  'ev_since': ' (data from {day})',
+  'ev_seen_runs': 'runs: {n}×', 'ev_seen_runs_t': 'Ran {n}× in {d} days per the workload metrics: likely in real use — review before deleting.',
+  'ev_via_runs_t': 'The workflows that trigger this custom event ran {n}× in {d} days (workload counts a custom event inside its caller, so this is an upper bound): likely in use — review before deleting.',
+  'ev_none_runs': 'runs: 0', 'ev_none_runs_t': 'No runs in the workload metrics over {d} days (this window only).',
+  'ev_unk_runs': 'runs: ?', 'ev_unk_runs_t': 'No evidence: the workload metrics do not measure this item (pages, API Connector calls, custom events nothing triggers, page workflows with no server-side action) or its data came back incomplete.',
   'how_body': 'Each item has a confidence level. In Bubble, “unreferenced” does not always mean “safe to delete”: pages have their own public URL (openable via direct link, email or iframe/embed) and plugins can run server-side with no visible element. Backend workflows, option sets, reusables and styles have deterministic signals and high confidence.',
   'c_pages': 'Pages with no internal navigation', 'c_reuse': 'Unused reusables',
   'c_back': 'Unreachable backend workflows', 'c_opt': 'Unused Option Sets',
@@ -1596,6 +1627,11 @@ STR = {
 def esc(s):
     return html.escape(str(s if s is not None else ''))
 
+def fmt_count(n, lang):
+    """Thousands separators the reader's way: 125,000 (en), 125.000 (pt)."""
+    text = '{:,}'.format(n)
+    return text.replace(',', '.') if lang == 'pt' else text
+
 UNBUBBLE_URL = 'https://github.com/yowpi-tech/unbubble'
 
 
@@ -1623,31 +1659,52 @@ def render_html(app_name, date_str, lang, pages, dyn, page_audit, reuse, backend
                                              n=integ['indexed_definitions'], h=integ['hollow_payload'])
                        + (f"<br><span class='dim'>{T['integ_sample']}: <span class='mono'>{ex}</span></span>" if ex else '')
                        + "</div>")
+    # every label follows the source of its evidence file: server logs ("logs:") or workflow runs
+    # from the workload metrics ("runs:" / "execuções:") — never one presented as the other
     ev = evidence or {}
     ev_keys = ev.get('by_key') or {}
-    ev_win = ev.get('window') or {}
-    ev_ver, ev_days = esc(ev.get('app_version') or 'live'), esc(ev_win.get('days') or '?')
+    ev_src = {src.get('kind'): src for src in ev.get('sources') or []}
     ev_block = ''
     if ev:
-        cnt = ev.get('counts') or {}
+        sentences = []
+        for src in ev.get('sources') or []:
+            win, cnt = src.get('window') or {}, src.get('counts') or {}
+            fields = dict(d=esc(win.get('days') or '?'), end=esc(str(win.get('end') or '?')[:10]),
+                          seen=cnt.get('seen', 0), none=cnt.get('not_seen', 0), unk=cnt.get('unknown', 0))
+            if src.get('kind') == 'runs':
+                since = str(win.get('data_from') or '')
+                late = since and since > str(win.get('start') or '')[:10]  # history shorter than the window
+                text = T['ev_b_runs'].format(since=T['ev_since'].format(day=esc(since)) if late else '', **fields)
+            else:
+                text = T['ev_b'].format(ver=esc(src.get('app_version') or 'live'), **fields)
+            sentences.append(text[:1].upper() + text[1:])
         ev_block = (f"<div class='note note-amber'><strong>{T['ev_t']}.</strong> "
-                    + T['ev_b'].format(ver=ev_ver, d=ev_days, end=esc(str(ev_win.get('end') or '?')[:10]),
-                                       seen=cnt.get('seen', 0), none=cnt.get('not_seen', 0),
-                                       unk=cnt.get('unknown', 0))
-                    + "</div>")
+                    + ' '.join(sentences) + "</div>")
 
     def ev_tag(key):
         row = ev_keys.get(key)
         if not row:
             return ''
+        runs = row.get('kind') == 'runs'
+        src = ev_src.get(row.get('kind')) or {}
+        ver, days = esc(src.get('app_version') or 'live'), esc((src.get('window') or {}).get('days') or '?')
         hits = row.get('hits')
         if hits:
-            cls, txt = 'v-orange', T['ev_seen'].format(n=hits)
-            tip = T['ev_seen_t'].format(n=hits, ver=ev_ver, d=ev_days, last=esc(str(row.get('last_seen') or '?')[:16]))
+            n = fmt_count(hits, lang)
+            cls = 'v-orange'
+            if runs:
+                txt = T['ev_seen_runs'].format(n=n)
+                tip = T['ev_via_runs_t' if row.get('basis') == 'triggerer' else 'ev_seen_runs_t'].format(n=n, d=days)
+            else:
+                txt = T['ev_seen'].format(n=n)
+                tip = T['ev_seen_t'].format(n=n, ver=ver, d=days, last=esc(str(row.get('last_seen') or '?')[:16]))
         elif hits == 0:
-            cls, txt, tip = 'v-green', T['ev_none'], T['ev_none_t'].format(ver=ev_ver, d=ev_days)
+            cls = 'v-green'
+            txt, tip = ((T['ev_none_runs'], T['ev_none_runs_t'].format(d=days)) if runs
+                        else (T['ev_none'], T['ev_none_t'].format(ver=ver, d=days)))
         else:
-            cls, txt, tip = 'v-gray', T['ev_unk'], T['ev_unk_t']
+            cls = 'v-gray'
+            txt, tip = (T['ev_unk_runs'], T['ev_unk_runs_t']) if runs else (T['ev_unk'], T['ev_unk_t'])
         return f"<span class='vbadge evtag {cls}' title=\"{esc(tip)}\">{txt}</span>"
     prov = provenance or {}
     prov_sub = ''
@@ -2221,7 +2278,8 @@ def main():
                          'or the connected-mode cleanup journal (repeatable; keys are merged)')
     ap.add_argument('--evidence', action='append',
                     help='runtime-evidence JSON from the connected mode (unbubble:connect runtime_evidence.py): '
-                         'log badges on the candidates it evaluated (repeatable)')
+                         'a "logs:" or "runs:" badge, after the file\'s source, on the candidates it evaluated '
+                         '(repeatable: one file per source)')
     ap.add_argument('--plugin-names', help='optional JSON {pluginId: name} to override/extend the bundled marketplace name registry')
     ap.add_argument('--plugin-pricing', help='optional JSON {pluginId: {status,model,price}} to override/extend the bundled pricing registry')
     args = ap.parse_args()
@@ -2335,7 +2393,8 @@ def main():
                                 'plugins': ghosts['plugins'], 'refs': keyed(ghosts['refs'], 'ghostref')},
     }
     if evidence:
-        # per tracker key: how often the candidate shows up in the server logs (counts only)
+        # per tracker key: how often the candidate showed up at runtime (counts only), and in which
+        # source — `kind` logs (server logs) or runs (workload metrics)
         summary['runtime_evidence'] = evidence
     if args.json:
         with open(args.json, 'w', encoding='utf-8') as f:
@@ -2350,10 +2409,14 @@ def main():
     if provenance:
         print('  Provenance      : downloaded via connected mode · version %s · %s'
               % (provenance.get('app_version') or provenance.get('version') or '?', provenance.get('fetched_at') or '?'))
-    if evidence:
-        print('  Runtime evidence: %d seen in the %s logs (review before deleting), %d not seen, %d unknown - %s days'
-              % (evidence['counts']['seen'], evidence.get('app_version') or 'live', evidence['counts']['not_seen'],
-                 evidence['counts']['unknown'], (evidence.get('window') or {}).get('days') or '?'))
+    for src in (evidence or {}).get('sources') or []:
+        cnt, days = src['counts'], (src.get('window') or {}).get('days') or '?'
+        if src['kind'] == 'runs':
+            print('  Runtime evidence: %d ran per the workload metrics (review before deleting), %d did not run,'
+                  ' %d unknown - %s days' % (cnt['seen'], cnt['not_seen'], cnt['unknown'], days))
+        else:
+            print('  Runtime evidence: %d seen in the %s logs (review before deleting), %d not seen, %d unknown - %s days'
+                  % (cnt['seen'], src.get('app_version') or 'live', cnt['not_seen'], cnt['unknown'], days))
     print('  Pages           : %d / %d no id-navigation; of those %d linked by URL/name (kept) -> %d deletable candidates'
           % (len(up) + len(ref_url), len(pages), len(ref_url), len(up)))
     if mobile['total']:
